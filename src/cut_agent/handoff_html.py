@@ -9,6 +9,7 @@ from mdit_py_plugins.tasklists import tasklists_plugin
 
 
 _SECTIONS = (
+    ("素材交接清单.md", "cut-sources", "素材交接清单"),
     ("粗剪方案.md", "cut-plan", "粗剪方案"),
     ("精剪指导.md", "cut-guide", "精剪指导"),
     ("精剪核对记录.md", "cut-review", "核对记录"),
@@ -116,7 +117,7 @@ def build_html(documents: dict[str, str], run_id: str, revision: int, preview: b
             f'<nav aria-label="交接目录">{links}</nav></aside><main>'
             '<details class="mobile-directory"><summary>查看交接目录</summary>'
             f'<nav aria-label="移动端交接目录">{links}</nav></details>'
-            '<section class="notice"><p>先核对粗剪方案的取材与时间码，再按精剪指导在达芬奇等软件中执行。'
+            '<section class="notice"><p>先按素材交接清单带齐画面与配乐源文件，核对粗剪方案的取材与时间码，再按精剪指导在达芬奇等软件中执行。'
             '原始素材、网络素材及配乐源文件需另行携带并重新定位。</p>'
             '<p>本页可离线阅读；人工核对状态请以包内《精剪核对记录.md》为准。</p>'
             f'{video}</section>{"".join(rendered)}</main></div></body></html>')

@@ -47,7 +47,10 @@ export function TimelineWorkspace({ arts, runId, editable, revision, editRequest
         children: editable ? <>
           <PlanEditor runId={runId} publishedRevision={revision}
             focusRow={focusRow} onChanged={onChanged} />
-          <Button style={{ marginTop: 12 }} onClick={() => choosePane("critique")}>下一步：查看自检</Button>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+            <Button onClick={() => choosePane("critique")}>下一步：查看自检</Button>
+            <Button onClick={onOpenPreview}>返回预览</Button>
+          </div>
         </> : <Empty description="文档产出后可编辑" /> },
       { key: "critique", label: <span>3 · 查看自检 {warningCount > 0 && <Badge count={warningCount} size="small" />}</span>,
         children: <>

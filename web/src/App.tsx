@@ -274,6 +274,7 @@ function RunView({ id, onBack, onCompare, initialStage, initialPane, backLabel =
   const [timelineEditRequest, setTimelineEditRequest] = useState<{ seq: number; token: number }>();
   const timelineEditToken = useRef(0);
   const [showMobileStages, setShowMobileStages] = useState(false);
+  const phaseNavRef = useRef<HTMLElement>(null);
   const sinceRef = useRef(0);
   const fetchedRef = useRef<Map<string, string>>(new Map());
   const versionsRef = useRef<Record<string, string>>({});
@@ -350,6 +351,20 @@ function RunView({ id, onBack, onCompare, initialStage, initialPane, backLabel =
     ? runningIdx
     : Math.min(doneCount, Math.max(0, (meta?.stages.length ?? 1) - 1));
   const currentStageName = meta?.stages[currentIdx]?.name ?? "";
+  const hasTimeline = !!((arts.build_timeline as { timeline?: unknown[] } | undefined)?.timeline?.length);
+  const selectedStageName = tabKey ?? (meta?.status === "done" && hasTimeline ? "build_timeline" : currentStageName);
+  const phaseNavReady = !!meta && !meta.export_pending;
+  useEffect(() => {
+    const nav = phaseNavRef.current;
+    if (!phaseNavReady || !nav || !selectedStageName || window.innerWidth <= 850) return;
+    const node = Array.from(nav.querySelectorAll<HTMLButtonElement>(".run-stage-node"))
+      .find((item) => item.dataset.stage === selectedStageName);
+    if (!node) return;
+    const navRect = nav.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    if (nodeRect.bottom > navRect.bottom - 8) nav.scrollTop += nodeRect.bottom - navRect.bottom + 8;
+    else if (nodeRect.top < navRect.top + 8) nav.scrollTop -= navRect.top - nodeRect.top + 8;
+  }, [selectedStageName, phaseNavReady]);
   const doAction = async (kind: "pause" | "cancel" | "resume") => {
     try {
       await api[kind](id);
@@ -384,9 +399,7 @@ function RunView({ id, onBack, onCompare, initialStage, initialPane, backLabel =
 
   const docArt = arts.write_doc as { doc_path?: string; preview?: PreviewInfo | null; revision?: number } | undefined;
   const musicArt = arts.pick_music as { music?: { downloads?: { local: string }[] } } | undefined;
-  const hasTimeline = !!((arts.build_timeline as { timeline?: unknown[] } | undefined)?.timeline?.length);
   const defaultStage = meta.status === "done" && hasTimeline ? "build_timeline" : currentStageName;
-  const selectedStageName = tabKey ?? defaultStage;
   const activeStage = meta.stages[currentIdx];
   const viewedStage = meta.stages.find((stage) => stage.name === selectedStageName);
   const compareWith = relatedRuns.some((run) => run.id === comparisonTarget)
@@ -401,7 +414,7 @@ function RunView({ id, onBack, onCompare, initialStage, initialPane, backLabel =
     requestAnimationFrame(() =>
       document.querySelector(".run-stage-tabs")?.scrollIntoView({ behavior: "auto", block: "start" }));
   };
-  const editWebRow = (seq: number) => {
+  const editTimelineRow = (seq: number) => {
     setTimelineEditRequest({ seq, token: ++timelineEditToken.current });
     jumpToStage("build_timeline");
   };
@@ -489,7 +502,7 @@ function RunView({ id, onBack, onCompare, initialStage, initialPane, backLabel =
           </Typography.Paragraph>}
       </Card>
       <div className="run-workspace">
-      <section className={`run-phase-overview${showMobileStages ? " is-mobile-open" : ""}`} aria-label="粗剪流程阶段">
+      <section ref={phaseNavRef} className={`run-phase-overview${showMobileStages ? " is-mobile-open" : ""}`} aria-label="粗剪流程阶段">
         <div className="run-phase-overview__intro">
           <Typography.Text strong>粗剪流程 · 4 个阶段 / {meta.stages.length} 个节点</Typography.Text>
           <Typography.Text type="secondary">选择节点查看产物；高亮边框标出当前流程节点。</Typography.Text>
@@ -576,12 +589,13 @@ function RunView({ id, onBack, onCompare, initialStage, initialPane, backLabel =
                 onOpenPreview={() => jumpToStage("write_doc")} />
                 : name === "write_doc" && has ? <>
                 {meta.status === "done" && docArt && <PreviewPlayer runId={id} preview={docArt.preview} revision={docArt.revision}
-                  onChanged={() => { fetchedRef.current.clear(); void loadMeta(); }} />}
+                  onChanged={() => { fetchedRef.current.clear(); void loadMeta(); }}
+                  onEditRow={hasTimeline ? editTimelineRow : undefined} />}
                 <StagePanels runId={id} stage={name} art={arts[name] as Record<string, unknown>} mediaDir={meta.media_dir}
                   version={meta.artifact_versions?.[name]} arts={arts} />
               </> : has ? <StagePanels runId={id} stage={name} art={arts[name] as Record<string, unknown>}
                 mediaDir={meta.media_dir} version={meta.artifact_versions?.[name]} arts={arts}
-                onEditWebRow={meta.status === "done" && hasTimeline ? editWebRow : undefined} />
+                onEditRow={meta.status === "done" && hasTimeline ? editTimelineRow : undefined} />
                 : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
                   description={meta.has_artifacts?.[name] ? "正在加载阶段产物…"
                     : s.status === "running" ? "正在处理…" : s.status === "paused" ? "已暂停在该阶段" : "该阶段尚未开始"} />}

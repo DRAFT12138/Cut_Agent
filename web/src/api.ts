@@ -57,6 +57,20 @@ export interface ReviewState {
   reset_for_new_guide: boolean;
 }
 
+export interface SourceCheck {
+  revision: number;
+  pictures: {
+    seq: number; name: string; source: "local" | "web"; path: string | null;
+    size_bytes: number | null; availability: "available" | "missing" | "manual";
+    snapshot: "match" | "changed" | "missing" | "unrecorded" | "not_applicable";
+    source_url: string | null;
+  }[];
+  music: {
+    role: "preview" | "alternative"; title: string; path: string | null;
+    size_bytes: number | null; availability: "available" | "missing";
+  }[];
+}
+
 async function j<T>(p: string, init?: RequestInit): Promise<T> {
   const r = await fetch(p, init);
   if (!r.ok) {
@@ -96,6 +110,8 @@ export const api = {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     }),
   reviewUrl: (id: string) => `/api/runs/${encodeURIComponent(id)}/review.md`,
+  sourceCheck: (id: string) => j<SourceCheck>(`/api/runs/${encodeURIComponent(id)}/sources`),
+  sourcesUrl: (id: string) => `/api/runs/${encodeURIComponent(id)}/sources.md`,
   handoffUrl: (id: string) => `/api/runs/${encodeURIComponent(id)}/handoff.zip`,
   pause: (id: string) =>
     j<{ run_id: string; status: string }>(`/api/runs/${id}/pause`, { method: "POST" }),

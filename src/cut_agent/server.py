@@ -193,6 +193,31 @@ def make_app() -> FastAPI:
         return PlainTextResponse(content, media_type="text/markdown",
                                  headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"})
 
+    @app.get("/api/runs/{run_id}/sources.md")
+    def download_sources(run_id: str):
+        from .handoff import source_manifest
+        if not runctl.run_dir(run_id).is_dir():
+            raise HTTPException(404, f"run 不存在: {run_id}")
+        try:
+            content = source_manifest(run_id)
+        except RunError as exc:
+            raise HTTPException(409, str(exc))
+        filename = quote("素材交接清单.md")
+        return PlainTextResponse(content, media_type="text/markdown",
+                                 headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+                                          "Cache-Control": "no-store"})
+
+    @app.get("/api/runs/{run_id}/sources")
+    def check_sources(run_id: str):
+        from .handoff import source_check
+        if not runctl.run_dir(run_id).is_dir():
+            raise HTTPException(404, f"run 不存在: {run_id}")
+        try:
+            content = source_check(run_id)
+        except RunError as exc:
+            raise HTTPException(409, str(exc))
+        return JSONResponse(content, headers={"Cache-Control": "no-store"})
+
     @app.get("/api/runs/{run_id}/handoff.zip")
     def download_handoff(run_id: str):
         from .handoff import build

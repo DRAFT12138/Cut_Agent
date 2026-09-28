@@ -11,7 +11,7 @@ import time
 
 from playwright.sync_api import sync_playwright
 
-from cut_agent import graph, handoff, runs, runctl, vision
+from cut_agent import editing, graph, handoff, runs, runctl, vision
 from cut_agent.config import ROOT
 from cut_agent.llm import LLMError
 
@@ -47,6 +47,13 @@ def main() -> None:
                                        options={"preview": True, "finishing_llm": False}, sync=True)
             run_id = handle.run_id
             assert runs.status_of(run_id)["status"] == "done"
+            plan_path = runctl.run_dir(run_id) / "plan.json"
+            draft = runctl.read_json(plan_path)
+            draft["timeline"][0]["segment_text"] = "第一句\n第二句\t下一格"
+            draft["timeline"][0]["note"] = "复核源片\r\n确认动作"
+            runctl.write_json_atomic(plan_path, draft)
+            updated = editing.rebuild(run_id, expected_revision=0, preview=True)
+            assert updated["revision"] == 1
             archive = handoff.build(run_id)
             portable = root / "portable"
             portable.mkdir()
@@ -55,11 +62,20 @@ def main() -> None:
                 assert all(".." not in Path(name).parts and not Path(name).is_absolute() for name in names)
                 bundle.extractall(portable)
             assert (portable / "精剪交接.html").is_file()
+            assert (portable / "素材交接清单.md").is_file()
             assert (portable / "preview.mp4").is_file()
             plan = json.loads((portable / "plan.json").read_text(encoding="utf-8"))
+            assert plan["revision"] == updated["revision"]
+            source_manifest = (portable / "素材交接清单.md").read_text(encoding="utf-8")
+            assert f"方案修订：{plan['revision']}" in source_manifest
+            assert all(str(row["media"]) in source_manifest for row in plan["timeline"])
+            assert source_manifest.count(" | 一致 | ") == len(plan["timeline"])
             cut_lines = (portable / "cut_lines.txt").read_text(encoding="utf-8").splitlines()
             assert len(cut_lines) == len(plan["timeline"]) + 1
             columns = cut_lines[0].split("\t")
+            first_row = cut_lines[1].split("\t")
+            assert first_row[5] == "第一句 第二句 下一格"
+            assert first_row[6] == "复核源片 确认动作"
             for line, card in zip(cut_lines[1:], plan["storyboard"]["cards"], strict=True):
                 values = line.split("\t")
                 assert len(values) == len(columns)
@@ -85,6 +101,13 @@ def main() -> None:
             played_to = round(video.evaluate("element => element.currentTime"), 2)
             desktop.screenshot(path=str(root / "offline-handoff-desktop.png"), full_page=False)
             nav = desktop.get_by_role("navigation", name="交接目录")
+            nav.get_by_role("link", name="素材交接清单", exact=True).click()
+            assert "#cut-sources" in desktop.url
+            assert desktop.locator("#cut-sources table").count() >= 1
+            desktop.wait_for_function("() => { const top = document.querySelector('#cut-sources')?.getBoundingClientRect().top; return top !== undefined && top >= -5 && top <= 120; }", timeout=10000)
+            source_rows = desktop.locator("#cut-sources table").first.locator("tbody tr").count()
+            assert source_rows == len(plan["timeline"])
+            desktop.screenshot(path=str(root / "offline-handoff-sources.png"), full_page=False)
             nav.get_by_role("link", name="执行卡").click()
             assert "#cut-plan-section-3" in desktop.url
             desktop.get_by_role("heading", name="执行卡", exact=True).last.scroll_into_view_if_needed()
@@ -109,9 +132,11 @@ def main() -> None:
             mobile.screenshot(path=str(root / "offline-handoff-mobile.png"), full_page=False)
             assert not errors, errors
             assert not network_requests, network_requests
-            report = {"run": run_id, "portable_html": str((portable / "精剪交接.html").resolve()),
+            report = {"run": run_id, "plan_revision": plan["revision"],
+                      "portable_html": str((portable / "精剪交接.html").resolve()),
                       "zip_members": len(names), "loaded_images": desktop.locator(".document img").count(),
                       "cut_line_rows": len(cut_lines) - 1, "cut_line_columns": len(columns),
+                      "source_manifest_rows": source_rows,
                       "video_duration": round(video.evaluate("element => element.duration"), 2),
                       "video_played_to": played_to,
                       "desktop_execution_card_anchor": "cut-plan-section-3",

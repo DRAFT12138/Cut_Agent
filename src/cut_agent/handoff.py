@@ -14,8 +14,120 @@ from .review import export_markdown
 
 
 _LINK = re.compile(r"!?\[[^\]\n]*\]\((?:<([^>\n]+)>|([^\s)\n]+))\)")
-_DOCS = ("精剪指导.md", "精剪核对记录.md", "粗剪方案.md", "精剪交接.html")
+_DOCS = ("精剪指导.md", "精剪核对记录.md", "粗剪方案.md", "素材交接清单.md", "精剪交接.html")
 _FILES = ("plan.json", "cut_lines.txt")
+
+
+def _markdown_cell(value: object) -> str:
+    return " ".join(str(value if value is not None else "-").splitlines()).replace("\\", "\\\\").replace("|", "\\|")
+
+
+def _file_info(path: Path | None) -> tuple[str, int | None]:
+    try:
+        if path and path.is_file():
+            stat = path.stat()
+            return str(stat.st_size), stat.st_mtime_ns
+    except OSError:
+        pass
+    return "-", None
+
+
+def _picture_sources(plan: dict, media_snapshot: list[dict] | None = None) -> list[dict]:
+    """Check each current timeline row against the media present on this machine."""
+    folder = Path(str(plan["media_folder"])).resolve() if plan.get("media_folder") else None
+    snapshots = {str(item["name"]): item for item in media_snapshot or []
+                 if isinstance(item, dict) and item.get("name")}
+    sources = []
+    for seq, row in enumerate(plan.get("timeline") or [], 1):
+        name = str(row.get("media") or "待补素材")
+        source = row.get("source") or "local"
+        path: Path | None = None
+        if source == "web":
+            verified = row.get("asset_status") == "verified"
+            if verified and row.get("local_path"):
+                path = Path(str(row["local_path"])).resolve()
+            size, _ = _file_info(path)
+            availability = ("available" if size != "-" else "missing") if verified else "manual"
+            snapshot_check = "not_applicable"
+        else:
+            if folder:
+                candidate = (folder / name).resolve()
+                if candidate.is_relative_to(folder):
+                    path = candidate
+            size, modified = _file_info(path)
+            availability = "available" if size != "-" else "missing"
+            original = snapshots.get(name)
+            if size == "-":
+                snapshot_check = "missing"
+            elif original is None:
+                snapshot_check = "unrecorded"
+            elif original.get("size") == int(size) and original.get("mtime_ns") == modified:
+                snapshot_check = "match"
+            else:
+                snapshot_check = "changed"
+        sources.append({"seq": seq, "name": name, "source": source,
+                        "path": str(path) if path else None,
+                        "size_bytes": int(size) if size != "-" else None,
+                        "availability": availability, "snapshot": snapshot_check,
+                        "source_url": row.get("source_url") or None})
+    return sources
+
+
+def _music_sources(plan: dict) -> list[dict]:
+    sources = []
+    for index, item in enumerate((plan.get("music") or {}).get("downloads") or []):
+        path = Path(str(item["local"])).resolve() if item.get("local") else None
+        size, _ = _file_info(path)
+        sources.append({"role": "preview" if index == 0 else "alternative",
+                        "title": item.get("title") or "未命名配乐",
+                        "path": str(path) if path else None,
+                        "size_bytes": int(size) if size != "-" else None,
+                        "availability": "available" if size != "-" else "missing"})
+    return sources
+
+
+def _source_check(plan: dict, media_snapshot: list[dict] | None = None) -> dict:
+    """Structured counterpart of the downloadable checklist, for the Web handoff node."""
+    return {"revision": plan.get("revision", 0),
+            "pictures": _picture_sources(plan, media_snapshot),
+            "music": _music_sources(plan)}
+
+
+def _source_manifest(plan: dict, media_snapshot: list[dict] | None = None) -> str:
+    """List the source files an editor must carry separately for this revision."""
+    check = _source_check(plan, media_snapshot)
+    local_labels = {"available": "本地文件存在", "missing": "本地文件缺失"}
+    web_labels = {"available": "已验证入库", "missing": "已验证但文件缺失",
+                  "manual": "待人工替换"}
+    snapshot_labels = {"match": "一致", "changed": "已变化，需复核",
+                       "missing": "无法核对", "unrecorded": "未记录",
+                       "not_applicable": "-"}
+    lines = ["# 素材交接清单", "",
+             f"方案修订：{plan.get('revision', 0)}。本清单按当前时间线生成；媒体文件不在交接 ZIP 内。",
+             "将下列原始文件另行复制，按文件名及字节数核对后在达芬奇等软件中重新定位。行号与 cut_lines.txt 对应。",
+             "任务输入快照核对本地文件的原始大小与修改时间；标记“已变化，需复核”的文件不要直接当作原版。网络和配乐文件不在任务输入快照中。", "",
+             "## 画面素材", "",
+             "| 行号 | 素材名 | 来源 | 原机器文件路径 | 文件字节数 | 当前状态 | 任务输入快照 | 来源链接 |",
+             "|---:|---|---|---|---:|---|---|---|"]
+    for row in check["pictures"]:
+        labels = web_labels if row["source"] == "web" else local_labels
+        status = labels[row["availability"]]
+        values = (row["seq"], row["name"], "网络" if row["source"] == "web" else "本地",
+                  row["path"] or "-", row["size_bytes"] if row["size_bytes"] is not None else "-",
+                  status, snapshot_labels[row["snapshot"]], row["source_url"] or "-")
+        lines.append("| " + " | ".join(_markdown_cell(value) for value in values) + " |")
+    lines += ["", "## 配乐源文件", ""]
+    if check["music"]:
+        lines += ["| 用途 | 曲目 | 原机器文件路径 | 文件字节数 | 当前状态 |",
+                  "|---|---|---|---:|---|"]
+        for item in check["music"]:
+            values = ("预览使用" if item["role"] == "preview" else "备选", item["title"],
+                      item["path"] or "-", item["size_bytes"] if item["size_bytes"] is not None else "-",
+                      "文件存在" if item["availability"] == "available" else "文件缺失")
+            lines.append("| " + " | ".join(_markdown_cell(value) for value in values) + " |")
+    else:
+        lines.append("当前方案没有已下载的配乐文件；如需配乐，请按精剪指导另行准备。")
+    return "\n".join(lines) + "\n"
 
 
 def _local_links(documents: dict[str, str]) -> set[str]:
@@ -53,6 +165,40 @@ def _file(root: Path, relative: str) -> Path:
     return path
 
 
+def _published_plan(run_id: str, root: Path) -> dict:
+    current = runctl.read_json(root / "run.json")
+    if (not isinstance(current, dict) or current.get("status") != "done"
+            or exports.pending(root)):
+        raise runctl.RunError("任务状态已变化，请稍后重新下载交接材料")
+    return load_plan(run_id)
+
+
+def _input_snapshot(root: Path) -> list[dict] | None:
+    record = runctl.read_json(root / "input.json")
+    snapshot = record.get("media_snapshot") if isinstance(record, dict) else None
+    return snapshot if isinstance(snapshot, list) else None
+
+
+def source_manifest(run_id: str) -> str:
+    """Return the same current-revision source checklist used by the ZIP."""
+    status = runs.status_of(run_id)
+    if status["status"] != "done" or status.get("export_pending"):
+        raise runctl.RunError("任务尚未完成或编辑导出正在恢复，暂不能生成素材清单")
+    root = runctl.run_dir(run_id)
+    with runctl.RunLease(run_id):
+        return _source_manifest(_published_plan(run_id, root), _input_snapshot(root))
+
+
+def source_check(run_id: str) -> dict:
+    """Return live source availability for the same published revision as the checklist."""
+    status = runs.status_of(run_id)
+    if status["status"] != "done" or status.get("export_pending"):
+        raise runctl.RunError("任务尚未完成或编辑导出正在恢复，暂不能核对交接素材")
+    root = runctl.run_dir(run_id)
+    with runctl.RunLease(run_id):
+        return _source_check(_published_plan(run_id, root), _input_snapshot(root))
+
+
 def build(run_id: str) -> SpooledTemporaryFile:
     """Return a seeked ZIP; the caller owns and must close the file."""
     status = runs.status_of(run_id)
@@ -62,12 +208,9 @@ def build(run_id: str) -> SpooledTemporaryFile:
     archive = SpooledTemporaryFile(max_size=16 * 1024 * 1024, mode="w+b")
     try:
         with runctl.RunLease(run_id):
-            current = runctl.read_json(root / "run.json")
-            if (not isinstance(current, dict) or current.get("status") != "done"
-                    or exports.pending(root)):
-                raise runctl.RunError("任务状态已变化，请稍后重新下载交接包")
-            plan = load_plan(run_id)
+            plan = _published_plan(run_id, root)
             documents = {
+                "素材交接清单.md": _source_manifest(plan, _input_snapshot(root)),
                 "精剪指导.md": _file(root, "精剪指导.md").read_text(encoding="utf-8"),
                 "精剪核对记录.md": export_markdown(run_id),
                 "粗剪方案.md": _file(root, "粗剪方案.md").read_text(encoding="utf-8"),
@@ -87,9 +230,10 @@ def build(run_id: str) -> SpooledTemporaryFile:
             source_dir = plan.get("media_folder") or "未记录"
             readme = ("# 精剪交接说明\n\n"
                       f"任务：{run_id}；方案修订：{plan.get('revision', 0)}。\n\n"
-                      "先阅读《粗剪方案.md》中的时间线与源入出点，再按《精剪指导.md》或"
+                      "先按《素材交接清单.md》核对需另带的画面与配乐源文件，"
+                      "阅读《粗剪方案.md》中的时间线与源入出点，再按《精剪指导.md》或"
                       "《精剪核对记录.md》在达芬奇等剪辑软件中执行精剪。"
-                      "也可直接在浏览器打开《精剪交接.html》离线查看三份文档与配图。"
+                      "也可直接在浏览器打开《精剪交接.html》离线查看清单、文档与配图。"
                       "《plan.json》和《cut_lines.txt》可用于核对时间线或供后续工具读取；"
                       "执行清单每行对应一段画面，并列出源入出点、成片入出点及素材状态。\n\n"
                       "配图与文档保持原有相对路径；若方案中链接了粗剪预览，预览也已打包。"

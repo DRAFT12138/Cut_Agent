@@ -9,8 +9,9 @@ export type PreviewInfo = {
   markers?: { seq: number; start: number; end: number; media: string; missing: boolean }[];
 };
 
-export function PreviewPlayer({ runId, preview, revision, onChanged }: {
-  runId: string; preview?: PreviewInfo | null; revision?: number; onChanged: () => void;
+export function PreviewPlayer({ runId, preview, revision, onChanged, onEditRow }: {
+  runId: string; preview?: PreviewInfo | null; revision?: number;
+  onChanged: () => void; onEditRow?: (seq: number) => void;
 }) {
   const video = useRef<HTMLVideoElement>(null);
   const [busy, setBusy] = useState(false);
@@ -65,6 +66,8 @@ export function PreviewPlayer({ runId, preview, revision, onChanged }: {
           <span>{active ? `当前第 ${active.seq} 段 · ${active.media}${active.missing ? "（素材待补）" : ""}` : "点击段落跳转"}</span>
           <span>{currentTime.toFixed(2)} / {total.toFixed(2)} 秒</span>
         </div>
+        {active && onEditRow && <Button size="small" style={{ marginTop: 8 }}
+          onClick={() => onEditRow(active.seq)}>调整当前第 {active.seq} 行</Button>}
       </div>}
       <Typography.Text type="secondary">{preview.has_music ? "已混入配乐" : "无配乐，预览无声"}；段号对应上方方案。</Typography.Text>
     </Space> : <Typography.Text type="secondary">

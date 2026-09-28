@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { App, Button, Card, Checkbox, Col, Empty, Image, Row, Space, Table, Tag, Typography } from "antd";
-import { api, fmtDur, ReviewState } from "./api";
+import { api, fmtDur, ReviewState, SourceCheck } from "./api";
 import { DocumentViewer } from "./document-viewer";
 import { Storyboard } from "./storyboard";
 
@@ -335,9 +335,13 @@ function DocPanel({ art, run, version }: { art: any; run: string; version: strin
 
 // ---------------- 出口 ----------------
 
-function FinishingPanel({ art, run, version }: { art: any; run: string; version: string }) {
+function FinishingPanel({ art, run, version, onEditRow }: { art: any; run: string; version: string;
+  onEditRow?: (seq: number) => void }) {
   const [review, setReview] = useState<ReviewState | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [sources, setSources] = useState<SourceCheck | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [checkingSources, setCheckingSources] = useState(false);
   const [saving, setSaving] = useState(false);
   const { message } = App.useApp();
   useEffect(() => {
@@ -348,6 +352,24 @@ function FinishingPanel({ art, run, version }: { art: any; run: string; version:
       .catch((error) => { if (active) setReviewError(String(error)); });
     return () => { active = false; };
   }, [run, version]);
+  useEffect(() => {
+    let active = true;
+    setSources(null);
+    setSourceError(null);
+    setCheckingSources(true);
+    api.sourceCheck(run).then((value) => { if (active) setSources(value); })
+      .catch((error) => { if (active) setSourceError(String(error)); })
+      .finally(() => { if (active) setCheckingSources(false); });
+    return () => { active = false; };
+  }, [run, version]);
+  const refreshSources = async () => {
+    setCheckingSources(true);
+    setSources(null);
+    setSourceError(null);
+    try { setSources(await api.sourceCheck(run)); setSourceError(null); }
+    catch (error) { setSourceError(String(error)); }
+    finally { setCheckingSources(false); }
+  };
   const updateCheck = async (index: number, checked: boolean) => {
     if (!review || saving) return;
     setReview({ ...review, items: review.items.map((item, i) => i === index ? { ...item, checked } : item) });
@@ -366,13 +388,42 @@ function FinishingPanel({ art, run, version }: { art: any; run: string; version:
   const guide = art.finishing;
   if (!guide) return <Empty description="精剪指导尚未生成" />;
   const directory = String(art.guide_path ?? "").replace(/[^/\\]+$/, "");
+  const pictureIssues = sources?.pictures.filter((item) => item.availability !== "available"
+    || (item.source === "local" && item.snapshot !== "match")) ?? [];
+  const musicIssues = sources?.music.filter((item) => item.availability !== "available") ?? [];
+  const availablePictures = sources?.pictures.filter((item) => item.availability === "available").length ?? 0;
   return <Space direction="vertical" style={{ width: "100%" }}>
     <Space wrap>
       <a href={api.handoffUrl(run)} download="精剪交接包.zip"><Button type="primary">下载精剪交接包.zip</Button></a>
+      <a href={api.sourcesUrl(run)} download="素材交接清单.md">下载素材交接清单.md</a>
       <a href={api.fileUrl(art.guide_path, run)} target="_blank" rel="noreferrer">导出原始精剪指导.md</a>
       <a href={api.reviewUrl(run)} download="精剪核对记录.md">下载人工核对记录.md</a>
     </Space>
-    <Typography.Paragraph type="secondary">交接包含指导、人工核对记录、粗剪方案、执行清单、计划及配图；方案引用的粗剪预览也会打包。原始素材和配乐源文件需另行携带，在达芬奇等软件中执行精剪。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">交接包含素材清单、指导、人工核对记录、粗剪方案、执行清单、计划及配图；方案引用的粗剪预览也会打包。按素材清单另行携带原始画面和配乐源文件，再到达芬奇等软件中执行精剪。</Typography.Paragraph>
+    <Card size="small" title="交接前素材核对" extra={<Button size="small" loading={checkingSources}
+      onClick={() => void refreshSources()}>重新核对</Button>}>
+      {sourceError && <Typography.Paragraph type="danger">当前机器素材核对失败：{sourceError}</Typography.Paragraph>}
+      {!sources && !sourceError && <Typography.Text type="secondary">正在核对当前机器上的源文件…</Typography.Text>}
+      {sources && <>
+        <Typography.Paragraph type={pictureIssues.length || musicIssues.length ? "warning" : "success"}>
+          方案修订 {sources.revision}：画面文件可找到 {availablePictures}/{sources.pictures.length}；
+          需复核画面 {pictureIssues.length} 行；已下载配乐缺失 {musicIssues.length} 份。
+        </Typography.Paragraph>
+        {pictureIssues.map((item) => <Typography.Paragraph key={item.seq} style={{ marginBottom: 6, overflowWrap: "anywhere" }}>
+          <Tag color="warning">第 {item.seq} 行</Tag>{item.name}：{item.availability === "manual" ? "网络素材待人工替换"
+            : item.availability === "missing" ? "原文件缺失"
+              : item.snapshot === "changed" ? "与任务输入快照不同，需复核"
+                : "任务输入未记录，需复核"}
+          {onEditRow && <Button size="small" style={{ marginLeft: 8 }}
+            onClick={() => onEditRow(item.seq)}>调整第 {item.seq} 行</Button>}
+        </Typography.Paragraph>)}
+        {musicIssues.map((item, index) => <Typography.Paragraph key={`${item.title}-${index}`} style={{ marginBottom: 6, overflowWrap: "anywhere" }}>
+          <Tag color="warning">配乐</Tag>{item.title}：已下载源文件缺失
+        </Typography.Paragraph>)}
+        {!sources.music.length && <Typography.Paragraph type="secondary">当前方案没有已下载配乐源文件；按精剪指导另行准备。</Typography.Paragraph>}
+        <Typography.Text type="secondary">本机核对仅比较本地画面的原始大小与修改时间；网络素材和配乐不在任务输入快照中。交接时仍需按清单另带源文件。</Typography.Text>
+      </>}
+    </Card>
     {guide.steps.map((step: any) => <Card size="small" key={step.seq}
       title={`#${step.seq} ${step.anchor.timeline_in_tc} → ${step.anchor.timeline_out_tc}`}>
       <Row gutter={[12, 8]} align="top">
@@ -387,6 +438,8 @@ function FinishingPanel({ art, run, version }: { art: any; run: string; version:
       <Typography.Paragraph>{step.voice}</Typography.Paragraph>
       <Typography.Paragraph type="secondary">源 {step.anchor.source_in_tc} → {step.anchor.source_out_tc}（出点不含）<br />{step.anchor.source_timing_note}</Typography.Paragraph>
       <Typography.Text type={step.anchor.shortfall > .05 ? "warning" : "secondary"}>{step.rhythm}</Typography.Text>
+      {onEditRow && <div style={{ marginTop: 8 }}><Button size="small"
+        onClick={() => onEditRow(step.seq)}>调整第 {step.seq} 行</Button></div>}
     </Card>)}
     <Card size="small" title="音乐执行">
       <Typography.Paragraph>从帧 0 开始，淡入 {guide.music.fade_in_seconds}s，淡出 {guide.music.fade_out_seconds}s；旁白 ducking {guide.music.ducking_db}dB。</Typography.Paragraph>
@@ -435,7 +488,7 @@ export function StagePanels({
   mediaDir,
   version = "0",
   arts = {},
-  onEditWebRow,
+  onEditRow,
 }: {
   runId: string;
   stage: string;
@@ -443,7 +496,7 @@ export function StagePanels({
   mediaDir?: string;
   version?: string;
   arts?: Record<string, unknown>;
-  onEditWebRow?: (seq: number) => void;
+  onEditRow?: (seq: number) => void;
 }) {
   switch (stage) {
     case "scan_media":
@@ -453,13 +506,13 @@ export function StagePanels({
     case "understand_media":
       return <UnderstandPanel art={art} run={runId} />;
     case "explore_web":
-      return <WebPanel art={art} run={runId} onEditRow={onEditWebRow} />;
+      return <WebPanel art={art} run={runId} onEditRow={onEditRow} />;
     case "pick_music":
       return <MusicPanel art={art} run={runId} />;
     case "write_doc":
       return <DocPanel art={art} run={runId} version={version} />;
     case "finishing_guide":
-      return <FinishingPanel art={art} run={runId} version={version} />;
+      return <FinishingPanel art={art} run={runId} version={version} onEditRow={onEditRow} />;
     case "build_timeline":
       return <Space direction="vertical" style={{ width: "100%" }}>
         <Storyboard arts={{ scan_media: arts.scan_media, understand_media: arts.understand_media, build_timeline: art }} runId={runId} />
