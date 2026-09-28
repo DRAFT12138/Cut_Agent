@@ -47,9 +47,11 @@ def display_geometry(stream: dict) -> dict:
 
 
 def video_fit_filter(width: int, height: int) -> str:
-    # reset_sar applies the input display aspect before producing square pixels.
-    return (f"scale={width}:{height}:force_original_aspect_ratio=decrease:"
-            "force_divisible_by=2:reset_sar=1")
+    # Normalize pixel aspect before fitting. This works with FFmpeg versions
+    # whose scale filter does not yet support reset_sar.
+    return (f"scale=iw*sar:ih,setsar=1,"
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease:"
+            "force_divisible_by=2")
 
 
 def image_display_geometry(image: Image.Image) -> dict:
