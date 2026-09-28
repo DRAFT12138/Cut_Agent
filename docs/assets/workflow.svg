@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 340" role="img" aria-labelledby="title description">
+  <title id="title">Cut Agent rough-cut workflow</title>
+  <desc id="description">Four phases: prepare media and script; assemble rough cut; review the document and optional preview; hand off finishing guidance.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#101a2a"/>
+      <stop offset="1" stop-color="#172a3c"/>
+    </linearGradient>
+    <style>
+      .title { font: 700 24px system-ui, sans-serif; fill: #f4f8fc; }
+      .phase { font: 700 16px system-ui, sans-serif; fill: #f4f8fc; }
+      .english { font: 500 12px system-ui, sans-serif; fill: #a8bdce; }
+      .step { font: 500 14px system-ui, sans-serif; fill: #e8f2fa; }
+      .foot { font: 500 13px system-ui, sans-serif; fill: #b5c9d8; }
+    </style>
+  </defs>
+  <rect width="1160" height="340" rx="20" fill="url(#background)"/>
+  <text class="title" x="36" y="42">Cut Agent <tspan fill="#6ee7c0">/</tspan> 粗剪工作流</text>
+  <text class="english" x="36" y="65">From source clips and script to an editable plan and finishing handoff</text>
+
+  <g transform="translate(35 92)">
+    <rect width="255" height="196" rx="14" fill="#20364c" stroke="#497b8f"/>
+    <rect width="255" height="5" rx="3" fill="#6ee7c0"/>
+    <text class="phase" x="18" y="33">01  准备素材与脚本</text>
+    <text class="english" x="18" y="52">Prepare media and script</text>
+    <text class="step" x="18" y="86">●  扫描素材 · Scan media</text>
+    <text class="step" x="18" y="119">●  文案分段 · Split script</text>
+    <text class="step" x="18" y="152">●  镜头理解 · Analyze shots</text>
+  </g>
+
+  <path d="M297 190h20m-9-9 9 9-9 9" fill="none" stroke="#6ee7c0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(324 92)">
+    <rect width="255" height="196" rx="14" fill="#20364c" stroke="#497b8f"/>
+    <rect width="255" height="5" rx="3" fill="#77b8ff"/>
+    <text class="phase" x="18" y="33">02  搭建粗剪</text>
+    <text class="english" x="18" y="52">Assemble the rough cut</text>
+    <text class="step" x="18" y="86">●  时间线 · Timeline</text>
+    <text class="step" x="18" y="119">●  网络素材 · Web assets</text>
+    <text class="step" x="18" y="152">●  配乐 · Music</text>
+  </g>
+
+  <path d="M586 190h20m-9-9 9 9-9 9" fill="none" stroke="#77b8ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(613 92)">
+    <rect width="255" height="196" rx="14" fill="#20364c" stroke="#497b8f"/>
+    <rect width="255" height="5" rx="3" fill="#f6c76d"/>
+    <text class="phase" x="18" y="33">03  检查粗剪</text>
+    <text class="english" x="18" y="52">Review the rough cut</text>
+    <text class="step" x="18" y="86">●  粗剪方案 · Plan</text>
+    <text class="step" x="18" y="119">●  可选预览 · Optional preview</text>
+    <text class="step" x="18" y="152">●  编辑与 A/B · Edit and compare</text>
+  </g>
+
+  <path d="M875 190h20m-9-9 9 9-9 9" fill="none" stroke="#f6c76d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(902 92)">
+    <rect width="223" height="196" rx="14" fill="#20364c" stroke="#497b8f"/>
+    <rect width="223" height="5" rx="3" fill="#fa9b9b"/>
+    <text class="phase" x="18" y="33">04  交接精剪</text>
+    <text class="english" x="18" y="52">Hand off finishing</text>
+    <text class="step" x="18" y="86">●  精剪指导 · Guide</text>
+    <text class="step" x="18" y="119">●  离线交接包 · ZIP</text>
+    <text class="step" x="18" y="152">●  人工完成 · Final edit</text>
+  </g>
+  <text class="foot" x="36" y="319">Input: local clips + script</text>
+  <text class="foot" x="1124" y="319" text-anchor="end">Output: plan.json + documents + optional preview + handoff ZIP</text>
+</svg>

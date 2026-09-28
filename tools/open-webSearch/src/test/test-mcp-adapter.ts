@@ -1,0 +1,730 @@
+import { execFileSync } from 'node:child_process';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { AppConfig } from '../config.js';
+import { createOpenWebSearchRuntime } from '../runtime/createRuntime.js';
+import { setupTools } from '../tools/setupTools.js';
+
+function assert(condition: unknown, message: string): asserts condition {
+    if (!condition) {
+        throw new Error(message);
+    }
+}
+
+function assertEqual<T>(actual: T, expected: T, label: string): void {
+    if (actual !== expected) {
+        throw new Error(`${label}: expected ${expected}, got ${actual}`);
+    }
+}
+
+function createStubRuntime() {
+    return createOpenWebSearchRuntime({
+        dependencies: {
+            searchExecutors: {
+                bing: async (query, limit) => [{
+                    title: 'Result',
+                    url: 'https://example.com',
+                    description: `${query}:${limit}`,
+                    source: 'example.com',
+                    engine: 'bing'
+                }]
+            },
+            fetchGithubReadme: async () => '# README',
+            fetchWebContent: async (url, maxChars, options) => ({
+                url,
+                finalUrl: url,
+                contentType: 'text/plain',
+                title: 'Example',
+                retrievalMethod: 'request' as const,
+                truncated: false,
+                content: `ok:${maxChars}:${options?.readability ? 'readability' : 'plain'}`,
+                readabilityApplied: options?.readability ?? false,
+                links: options?.includeLinks ? [{ text: 'Doc', href: 'https://example.com/doc' }] : undefined
+            }),
+            fetchCsdnArticle: async () => ({ content: 'csdn' }),
+            fetchJuejinArticle: async () => ({ content: 'juejin' }),
+            fetchLinuxDoArticle: async () => ({ content: 'linuxdo' })
+        }
+    });
+}
+
+function createTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
+    return {
+        defaultSearchEngine: 'bing',
+        allowedSearchEngines: [],
+        searchMode: 'request',
+        proxyUrl: '',
+        useProxy: false,
+        fakeIpCidrs: [],
+        fetchWebAllowInsecureTls: false,
+        playwrightPackage: 'auto',
+        playwrightModulePath: undefined,
+        playwrightExecutablePath: undefined,
+        playwrightWsEndpoint: undefined,
+        playwrightCdpEndpoint: undefined,
+        playwrightHeadless: true,
+        playwrightNavigationTimeoutMs: 20000,
+        enableCors: false,
+        corsOrigin: '*',
+        enableHttpServer: true,
+        ...overrides
+    };
+}
+
+function parseJsonBlock(text: string): unknown {
+    const jsonStart = text.indexOf('{');
+    if (jsonStart === -1) {
+        throw new Error(`No JSON block found in output: ${text}`);
+    }
+    return JSON.parse(text.slice(jsonStart));
+}
+
+function runModuleWithEnv(code: string, env: Record<string, string>): string {
+    return execFileSync(
+        process.execPath,
+        ['--input-type=module', '-e', code],
+        {
+            cwd: process.cwd(),
+            env: {
+                ...process.env,
+                ...env
+            },
+            encoding: 'utf8'
+        }
+    );
+}
+
+async function testSearchToolReturnsCompatiblePayload(): Promise<void> {
+    const runtime = createStubRuntime();
+    const server = new McpServer({ name: 'test', version: '1.0.0' });
+    setupTools(server, runtime);
+
+    const tools = (server as unknown as { _registeredTools: Record<string, { handler: (input: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+    const response = await tools.search.handler({
+        query: 'Open WebSearch',
+        limit: 3,
+        engines: ['bing']
+    });
+    const payload = JSON.parse(response.content[0].text) as {
+        query: string;
+        engines: string[];
+        totalResults: number;
+        results: Array<{ title: string; url: string; description: string; source: string; engine: string }>;
+        partialFailures: Array<{ engine: string; code: string; message: string }>;
+    };
+
+    assertEqual(payload.query, 'Open WebSearch', 'search payload query');
+    assertEqual(payload.engines[0], 'bing', 'search payload engine');
+    assertEqual(payload.totalResults, 1, 'search payload totalResults');
+    assertEqual(payload.results[0].description, 'Open WebSearch:3', 'search payload result description');
+    assert(Array.isArray(payload.partialFailures), 'search payload should expose partialFailures');
+    assertEqual(payload.partialFailures.length, 0, 'search payload partialFailures length');
+
+    console.log('✅ MCP search tool returns compatible payload');
+}
+
+async function testSetupToolsUsesRuntimeConfigDefaults(): Promise<void> {
+    const runtime = createOpenWebSearchRuntime({
+        config: createTestConfig({
+            defaultSearchEngine: 'startpage',
+            allowedSearchEngines: ['startpage', 'bing', 'sogou']
+        }),
+        dependencies: {
+            searchExecutors: {
+                startpage: async (query, limit) => [{
+                    title: 'Startpage Result',
+                    url: 'https://startpage.example.com',
+                    description: `${query}:${limit}`,
+                    source: 'startpage.example.com',
+                    engine: 'startpage'
+                }],
+                bing: async (query, limit) => [{
+                    title: 'Bing Result',
+                    url: 'https://example.com',
+                    description: `${query}:${limit}`,
+                    source: 'example.com',
+                    engine: 'bing'
+                }],
+                sogou: async (query, limit) => [{
+                    title: 'Sogou Result',
+                    url: 'https://sogou.example.com',
+                    description: `${query}:${limit}`,
+                    source: 'sogou.example.com',
+                    engine: 'sogou'
+                }]
+            },
+            fetchGithubReadme: async () => '# README',
+            fetchWebContent: async (url, maxChars, options) => ({
+                url,
+                finalUrl: url,
+                contentType: 'text/plain',
+                title: 'Example',
+                retrievalMethod: 'request' as const,
+                truncated: false,
+                content: `ok:${maxChars}:${options?.readability ? 'readability' : 'plain'}`,
+                readabilityApplied: options?.readability ?? false,
+                links: options?.includeLinks ? [{ text: 'Doc', href: 'https://example.com/doc' }] : undefined
+            }),
+            fetchCsdnArticle: async () => ({ content: 'csdn' }),
+            fetchJuejinArticle: async () => ({ content: 'juejin' }),
+            fetchLinuxDoArticle: async () => ({ content: 'linuxdo' })
+        }
+    });
+    const server = new McpServer({ name: 'test', version: '1.0.0' });
+    setupTools(server, runtime);
+
+    const tools = (server as unknown as {
+        _registeredTools: Record<string, {
+            description: string;
+            handler: (input: unknown) => Promise<{ content: Array<{ text: string }> }>;
+        }>;
+    })._registeredTools;
+
+    const response = await tools.search.handler({
+        query: 'Open WebSearch'
+    });
+    const payload = JSON.parse(response.content[0].text) as {
+        engines: string[];
+        results: Array<{ engine: string }>;
+    };
+
+    assertEqual(payload.engines[0], 'startpage', 'search handler should use runtime default engine');
+    assertEqual(payload.results[0].engine, 'startpage', 'search execution should respect runtime default engine');
+    assert(tools.search.description.includes('Startpage'), 'search description should use runtime-config allowed engines');
+    assert(tools.search.description.includes('Sogou'), 'search description should include Sogou when allowed');
+
+    console.log('✅ setupTools uses runtime.config defaults');
+}
+
+function testSearchSchemaSupportsHackerNews(): void {
+    const server = new McpServer({ name: 'test', version: '1.0.0' });
+    setupTools(server, createOpenWebSearchRuntime({ config: createTestConfig() }));
+
+    const tools = (server as unknown as {
+        _registeredTools: Record<string, {
+            description: string;
+            inputSchema: { safeParse: (input: unknown) => { success: boolean } };
+        }>;
+    })._registeredTools;
+    const accepted = tools.search.inputSchema.safeParse({
+        query: 'Model Context Protocol',
+        engines: ['Hacker News']
+    });
+    const rejected = tools.search.inputSchema.safeParse({
+        query: 'Model Context Protocol',
+        engines: ['not-a-real-engine']
+    });
+
+    assert(accepted.success, 'MCP search schema should accept the Hacker News alias');
+    assert(!rejected.success, 'MCP search schema should still reject unsupported engines');
+    assert(tools.search.description.includes('Hacker News'), 'MCP search description should mention Hacker News');
+
+    console.log('✅ MCP search schema supports Hacker News');
+}
+
+async function testSearchToolPassesSearchModeOverride(): Promise<void> {
+    const seenCalls: Array<{ searchMode?: string }> = [];
+    // 只有 SEARCH_MODE=auto 且 Playwright 可用时，searchMode 参数才会注册并转发；因此这里使用 auto + 远端端点配置。
+    const runtime = createOpenWebSearchRuntime({
+        config: createTestConfig({ searchMode: 'auto', playwrightWsEndpoint: 'ws://127.0.0.1:9999/', playwrightModulePath: 'test-assets/fake-playwright-client.cjs' }),
+        dependencies: {
+            searchExecutors: {
+                bing: async (query, limit, context) => {
+                    seenCalls.push({ searchMode: context?.searchMode });
+                    return [{
+                        title: 'Result',
+                        url: 'https://example.com',
+                        description: `${query}:${limit}:${context?.searchMode ?? 'none'}`,
+                        source: 'example.com',
+                        engine: 'bing'
+                    }];
+                }
+            },
+            fetchGithubReadme: async () => '# README',
+            fetchWebContent: async (url, maxChars, options) => ({
+                url,
+                finalUrl: url,
+                contentType: 'text/plain',
+                title: 'Example',
+                retrievalMethod: 'request' as const,
+                truncated: false,
+                content: `ok:${maxChars}:${options?.readability ? 'readability' : 'plain'}`,
+                readabilityApplied: options?.readability ?? false,
+                links: options?.includeLinks ? [{ text: 'Doc', href: 'https://example.com/doc' }] : undefined
+            }),
+            fetchCsdnArticle: async () => ({ content: 'csdn' }),
+            fetchJuejinArticle: async () => ({ content: 'juejin' }),
+            fetchLinuxDoArticle: async () => ({ content: 'linuxdo' })
+        }
+    });
+    const server = new McpServer({ name: 'test', version: '1.0.0' });
+    setupTools(server, runtime);
+
+    const tools = (server as unknown as { _registeredTools: Record<string, { handler: (input: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+    const response = await tools.search.handler({
+        query: 'Open WebSearch',
+        limit: 2,
+        searchMode: 'playwright',
+        engines: ['bing']
+    });
+    const payload = JSON.parse(response.content[0].text) as {
+        results: Array<{ description: string }>;
+    };
+
+    assertEqual(payload.results[0].description, 'Open WebSearch:2:playwright', 'MCP search should pass request-level search mode');
+    assertEqual(seenCalls[0].searchMode, 'playwright', 'MCP handler should forward search mode');
+
+    console.log('✅ MCP search tool passes search-mode override');
+}
+
+async function testSearchToolAutoModeUsesRuntimeDefault(): Promise<void> {
+    const seenCalls: Array<{ searchMode?: string }> = [];
+    const runtime = createOpenWebSearchRuntime({
+        config: createTestConfig({ searchMode: 'auto', playwrightWsEndpoint: 'ws://127.0.0.1:9999/', playwrightModulePath: 'test-assets/fake-playwright-client.cjs' }),
+        dependencies: {
+            searchExecutors: {
+                bing: async (query, limit, context) => {
+                    seenCalls.push({ searchMode: context?.searchMode });
+                    return [{
+                        title: 'Result',
+                        url: 'https://example.com',
+                        description: `${query}:${limit}:${context?.searchMode ?? 'none'}`,
+                        source: 'example.com',
+                        engine: 'bing'
+                    }];
+                }
+            },
+            fetchGithubReadme: async () => '# README',
+            fetchWebContent: async (url, maxChars, options) => ({
+                url,
+                finalUrl: url,
+                contentType: 'text/plain',
+                title: 'Example',
+                retrievalMethod: 'request' as const,
+                truncated: false,
+                content: `ok:${maxChars}:${options?.readability ? 'readability' : 'plain'}`,
+                readabilityApplied: options?.readability ?? false,
+                links: options?.includeLinks ? [{ text: 'Doc', href: 'https://example.com/doc' }] : undefined
+            }),
+            fetchCsdnArticle: async () => ({ content: 'csdn' }),
+            fetchJuejinArticle: async () => ({ content: 'juejin' }),
+            fetchLinuxDoArticle: async () => ({ content: 'linuxdo' })
+        }
+    });
+    const server = new McpServer({ name: 'test', version: '1.0.0' });
+    setupTools(server, runtime);
+
+    const tools = (server as unknown as { _registeredTools: Record<string, { handler: (input: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+    const response = await tools.search.handler({
+        query: 'Open WebSearch',
+        limit: 2,
+        searchMode: 'auto',
+        engines: ['bing']
+    });
+    const payload = JSON.parse(response.content[0].text) as {
+        results: Array<{ description: string }>;
+    };
+
+    assertEqual(payload.results[0].description, 'Open WebSearch:2:none', 'MCP search auto should behave like omitted search mode');
+    assertEqual(seenCalls[0].searchMode, undefined, 'MCP search auto should not override runtime search mode');
+
+    console.log('✅ MCP search tool treats auto search-mode as runtime default');
+}
+
+async function testFetchWebToolPassesReadabilityFlags(): Promise<void> {
+    const seenCalls: Array<{ readability?: boolean; includeLinks?: boolean; renderMode?: string }> = [];
+    const runtime = createOpenWebSearchRuntime({
+        config: createTestConfig(),
+        dependencies: {
+            searchExecutors: {
+                bing: async (query, limit) => [{
+                    title: 'Result',
+                    url: 'https://example.com',
+                    description: `${query}:${limit}`,
+                    source: 'example.com',
+                    engine: 'bing'
+                }]
+            },
+            fetchGithubReadme: async () => '# README',
+            fetchWebContent: async (url, maxChars, options) => {
+                seenCalls.push({
+                    readability: options?.readability,
+                    includeLinks: options?.includeLinks,
+                    renderMode: options?.renderMode
+                });
+                return {
+                    url,
+                    finalUrl: url,
+                    contentType: 'text/plain',
+                    title: 'Example',
+                    retrievalMethod: 'request' as const,
+                    truncated: false,
+                    content: `ok:${maxChars}`,
+                    readabilityApplied: options?.readability ?? false,
+                    links: options?.includeLinks ? [{ text: 'Doc', href: 'https://example.com/doc' }] : undefined
+                };
+            },
+            fetchCsdnArticle: async () => ({ content: 'csdn' }),
+            fetchJuejinArticle: async () => ({ content: 'juejin' }),
+            fetchLinuxDoArticle: async () => ({ content: 'linuxdo' })
+        }
+    });
+    const server = new McpServer({ name: 'test', version: '1.0.0' });
+    setupTools(server, runtime);
+
+    const tools = (server as unknown as { _registeredTools: Record<string, { handler: (input: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+    const fetchWebSchema = (tools.fetchWebContent as unknown as { inputSchema: { safeParse: (input: unknown) => { success: boolean } } }).inputSchema;
+    assert(fetchWebSchema.safeParse({ url: 'https://example.com', renderMode: 'browser' }).success, 'MCP fetch-web schema should accept browser renderMode');
+    assert(!fetchWebSchema.safeParse({ url: 'https://example.com', renderMode: 'invalid' }).success, 'MCP fetch-web schema should reject invalid renderMode');
+    const response = await tools.fetchWebContent.handler({
+        url: 'https://example.com',
+        maxChars: 3000,
+        readability: true,
+        includeLinks: true,
+        renderMode: 'browser'
+    });
+    const payload = JSON.parse(response.content[0].text) as {
+        readabilityApplied?: boolean;
+        links?: Array<{ href: string }>;
+    };
+
+    assertEqual(seenCalls[0].readability, true, 'MCP fetch-web should pass readability');
+    assertEqual(seenCalls[0].includeLinks, true, 'MCP fetch-web should pass includeLinks');
+    assertEqual(seenCalls[0].renderMode, 'browser', 'MCP fetch-web should pass renderMode');
+    assertEqual(payload.readabilityApplied, true, 'MCP fetch-web should expose readabilityApplied');
+    assertEqual(payload.links?.[0]?.href, 'https://example.com/doc', 'MCP fetch-web should expose links');
+
+    console.log('✅ MCP fetch-web tool passes readability flags');
+}
+
+function testCustomToolNamesAndFallbacks(): void {
+    const validOutput = runModuleWithEnv(
+        `
+            import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+            const { createOpenWebSearchRuntime } = await import('./build/runtime/createRuntime.js');
+            const { setupTools } = await import('./build/tools/setupTools.js');
+            const runtime = createOpenWebSearchRuntime();
+            const server = new McpServer({ name: 'test', version: '1.0.0' });
+            setupTools(server, runtime);
+            console.log(JSON.stringify({ names: Object.keys(server._registeredTools) }, null, 2));
+        `,
+        {
+            MCP_TOOL_SEARCH_NAME: 'webSearch',
+            MCP_TOOL_FETCH_GITHUB_NAME: 'repoReadme'
+        }
+    );
+    const validPayload = parseJsonBlock(validOutput) as { names: string[] };
+    assert(validPayload.names.includes('webSearch'), 'valid custom search tool name should be registered');
+    assert(validPayload.names.includes('repoReadme'), 'valid custom GitHub tool name should be registered');
+
+    const invalidOutput = runModuleWithEnv(
+        `
+            import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+            const { createOpenWebSearchRuntime } = await import('./build/runtime/createRuntime.js');
+            const { setupTools } = await import('./build/tools/setupTools.js');
+            const runtime = createOpenWebSearchRuntime();
+            const server = new McpServer({ name: 'test', version: '1.0.0' });
+            setupTools(server, runtime);
+            console.log(JSON.stringify({ names: Object.keys(server._registeredTools) }, null, 2));
+        `,
+        {
+            MCP_TOOL_SEARCH_NAME: '123bad',
+            MCP_TOOL_FETCH_WEB_NAME: 'bad name'
+        }
+    );
+    const invalidPayload = parseJsonBlock(invalidOutput) as { names: string[] };
+    assert(invalidPayload.names.includes('search'), 'invalid custom search tool name should fall back to default');
+    assert(invalidPayload.names.includes('fetchWebContent'), 'invalid custom web fetch tool name should fall back to default');
+
+    console.log('✅ MCP tool names respect custom overrides and fallback rules');
+}
+
+function testConfigDrivenEngineSelectionAndMode(): void {
+    const configOutput = runModuleWithEnv(
+        `
+            const { config, getProxyUrl } = await import('./build/config.js');
+            console.log(JSON.stringify({
+                defaultSearchEngine: config.defaultSearchEngine,
+                allowedSearchEngines: config.allowedSearchEngines,
+                searchMode: config.searchMode,
+                useProxy: config.useProxy,
+                proxyUrl: config.proxyUrl,
+                getProxyUrl: getProxyUrl(),
+                fetchWebAllowInsecureTls: config.fetchWebAllowInsecureTls,
+                fakeIpCidrs: config.fakeIpCidrs,
+                enableHttpServer: config.enableHttpServer
+            }, null, 2));
+        `,
+        {
+            MODE: 'stdio',
+            DEFAULT_SEARCH_ENGINE: 'hackernews',
+            ALLOWED_SEARCH_ENGINES: 'hackernews,bing,exa',
+            SEARCH_MODE: 'auto',
+            USE_PROXY: 'true',
+            PROXY_URL: 'http://127.0.0.1:7890',
+            FETCH_WEB_INSECURE_TLS: 'true',
+            FAKE_IP_CIDRS: '198.18.0.0/15'
+        }
+    );
+    const configPayload = parseJsonBlock(configOutput) as {
+        defaultSearchEngine: string;
+        allowedSearchEngines: string[];
+        searchMode: string;
+        useProxy: boolean;
+        proxyUrl: string;
+        getProxyUrl: string;
+        fetchWebAllowInsecureTls: boolean;
+        fakeIpCidrs: string[];
+        enableHttpServer: boolean;
+    };
+
+    assertEqual(configPayload.defaultSearchEngine, 'hackernews', 'configured default search engine');
+    assertEqual(configPayload.allowedSearchEngines.join(','), 'hackernews,bing,exa', 'configured allowed search engines');
+    assertEqual(configPayload.searchMode, 'auto', 'configured search mode');
+    assertEqual(configPayload.useProxy, true, 'configured useProxy');
+    assertEqual(configPayload.proxyUrl, 'http://127.0.0.1:7890', 'configured proxyUrl');
+    assertEqual(configPayload.getProxyUrl, 'http://127.0.0.1:7890', 'configured getProxyUrl');
+    assertEqual(configPayload.fetchWebAllowInsecureTls, true, 'configured fetchWebAllowInsecureTls');
+    assertEqual(configPayload.fakeIpCidrs.join(','), '198.18.0.0/15', 'configured fakeIpCidrs');
+    assertEqual(configPayload.enableHttpServer, false, 'MODE=stdio should disable HTTP server');
+
+    const fallbackOutput = runModuleWithEnv(
+        `
+            const { config } = await import('./build/config.js');
+            console.log(JSON.stringify({
+                defaultSearchEngine: config.defaultSearchEngine,
+                allowedSearchEngines: config.allowedSearchEngines
+            }, null, 2));
+        `,
+        {
+            DEFAULT_SEARCH_ENGINE: 'startpage',
+            ALLOWED_SEARCH_ENGINES: 'bing,exa'
+        }
+    );
+    const fallbackPayload = parseJsonBlock(fallbackOutput) as {
+        defaultSearchEngine: string;
+        allowedSearchEngines: string[];
+    };
+    assertEqual(fallbackPayload.defaultSearchEngine, 'bing', 'default engine should fall back to first allowed engine');
+    assertEqual(fallbackPayload.allowedSearchEngines.join(','), 'bing,exa', 'allowed search engines should remain stable');
+
+    const descriptionOutput = runModuleWithEnv(
+        `
+            import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+            const { createOpenWebSearchRuntime } = await import('./build/runtime/createRuntime.js');
+            const { setupTools } = await import('./build/tools/setupTools.js');
+            const runtime = createOpenWebSearchRuntime();
+            const server = new McpServer({ name: 'test', version: '1.0.0' });
+            setupTools(server, runtime);
+            console.log(JSON.stringify({
+                names: Object.keys(server._registeredTools),
+                searchDescription: server._registeredTools.search.description
+            }, null, 2));
+        `,
+        {
+            ALLOWED_SEARCH_ENGINES: 'hackernews,bing',
+            DEFAULT_SEARCH_ENGINE: 'hackernews',
+            // 将模块路径指向"可加载但不暴露 chromium"的夹具，确定性模拟 Playwright 不可用：本分支 devDependencies 已安装 playwright，无法再靠"清零参数=包加载不到"强制不可用。
+            PLAYWRIGHT_MODULE_PATH: 'test-assets/fake-playwright-no-chromium-client.cjs',
+            PLAYWRIGHT_PACKAGE: '',
+            PLAYWRIGHT_WS_ENDPOINT: '',
+            PLAYWRIGHT_CDP_ENDPOINT: '',
+            PLAYWRIGHT_EXECUTABLE_PATH: ''
+        }
+    );
+    const descriptionPayload = parseJsonBlock(descriptionOutput) as {
+        names: string[];
+        searchDescription: string;
+    };
+    assert(descriptionPayload.names.includes('search'), 'default search tool should still be registered');
+    assert(
+        descriptionPayload.searchDescription.includes('Hacker News') &&
+        descriptionPayload.searchDescription.includes('Bing'),
+        'search description should reflect allowed engines'
+    );
+    // 未配置任何 Playwright 参数时，auto 按强制请求处理：描述与 schema 均不暴露 searchMode。
+    assert(
+        !descriptionPayload.searchDescription.includes('searchMode'),
+        'search description should not mention searchMode when auto mode falls back to request-only'
+    );
+    assert(
+        !descriptionPayload.searchDescription.includes('Prefer searchMode=playwright'),
+        'search description must not recommend Playwright when it is unavailable'
+    );
+
+    // 配置了远端端点且客户端可真实加载后，auto 保持 auto：暴露 searchMode，提示 Agent 默认保持 auto、仅在 request 结果失败或异常时切换 playwright。
+    const guidedDescriptionOutput = runModuleWithEnv(
+        `
+            import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+            const { createOpenWebSearchRuntime } = await import('./build/runtime/createRuntime.js');
+            const { setupTools } = await import('./build/tools/setupTools.js');
+            const runtime = createOpenWebSearchRuntime();
+            const server = new McpServer({ name: 'test', version: '1.0.0' });
+            setupTools(server, runtime);
+            console.log(JSON.stringify({
+                searchDescription: server._registeredTools.search.description
+            }, null, 2));
+        `,
+        {
+            SEARCH_MODE: 'auto',
+            PLAYWRIGHT_WS_ENDPOINT: 'ws://127.0.0.1:9999/',
+            PLAYWRIGHT_MODULE_PATH: 'test-assets/fake-playwright-client.cjs'
+        }
+    );
+    const guidedDescriptionPayload = parseJsonBlock(guidedDescriptionOutput) as {
+        searchDescription: string;
+    };
+    assert(
+        guidedDescriptionPayload.searchDescription.includes('Start with the default auto') &&
+        guidedDescriptionPayload.searchDescription.includes('Only retry the same query with searchMode=playwright') &&
+        guidedDescriptionPayload.searchDescription.includes('anti-bot') &&
+        !guidedDescriptionPayload.searchDescription.includes('Prefer searchMode=playwright'),
+        'search description should guide agent to default auto and only escalate to playwright on failure'
+    );
+
+    // 审查场景复现：远端端点 + 不存在的客户端路径，必须判定为 Playwright 不可用，不向 Agent 推荐 Playwright、不暴露 searchMode。
+    const brokenClientDescriptionOutput = runModuleWithEnv(
+        `
+            import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+            const { createOpenWebSearchRuntime } = await import('./build/runtime/createRuntime.js');
+            const { setupTools } = await import('./build/tools/setupTools.js');
+            const { checkPlaywrightModeConfiguration } = await import('./build/config.js');
+            const runtime = createOpenWebSearchRuntime();
+            const server = new McpServer({ name: 'test', version: '1.0.0' });
+            setupTools(server, runtime);
+            console.log(JSON.stringify({
+                searchDescription: server._registeredTools.search.description,
+                playwrightCheck: checkPlaywrightModeConfiguration()
+            }, null, 2));
+        `,
+        {
+            SEARCH_MODE: 'auto',
+            PLAYWRIGHT_CDP_ENDPOINT: 'http://127.0.0.1:65530',
+            // 用"可加载但无 chromium"夹具确定性模拟客户端无效（playwright 已安装后，缺失路径会回退到已装包而不可复现）。
+            PLAYWRIGHT_MODULE_PATH: 'test-assets/fake-playwright-no-chromium-client.cjs',
+            PLAYWRIGHT_PACKAGE: '',
+            PLAYWRIGHT_WS_ENDPOINT: '',
+            PLAYWRIGHT_EXECUTABLE_PATH: ''
+        }
+    );
+    const brokenClientDescriptionPayload = parseJsonBlock(brokenClientDescriptionOutput) as {
+        searchDescription: string;
+        playwrightCheck: { available: boolean; reason: string | null };
+    };
+    assertEqual(brokenClientDescriptionPayload.playwrightCheck.available, false, 'CDP endpoint with an unloadable client must be detected as unavailable');
+    assert(
+        !brokenClientDescriptionPayload.searchDescription.includes('searchMode'),
+        'auto with a broken Playwright client must not expose searchMode guidance'
+    );
+
+    // 强制 Playwright：不包含任何 searchMode 提示。
+    const forcedPlaywrightDescriptionOutput = runModuleWithEnv(
+        `
+            import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+            const { createOpenWebSearchRuntime } = await import('./build/runtime/createRuntime.js');
+            const { setupTools } = await import('./build/tools/setupTools.js');
+            const runtime = createOpenWebSearchRuntime();
+            const server = new McpServer({ name: 'test', version: '1.0.0' });
+            setupTools(server, runtime);
+            console.log(JSON.stringify({
+                searchDescription: server._registeredTools.search.description
+            }, null, 2));
+        `,
+        {
+            SEARCH_MODE: 'playwright',
+            PLAYWRIGHT_MODULE_PATH: '',
+            PLAYWRIGHT_PACKAGE: '',
+            PLAYWRIGHT_WS_ENDPOINT: '',
+            PLAYWRIGHT_CDP_ENDPOINT: '',
+            PLAYWRIGHT_EXECUTABLE_PATH: ''
+        }
+    );
+    const forcedPlaywrightDescriptionPayload = parseJsonBlock(forcedPlaywrightDescriptionOutput) as {
+        searchDescription: string;
+    };
+    // 强制 request/playwright 或 auto 但 Playwright 不可用时：描述与 schema 都不再出现 searchMode，Agent 无法指定该参数。
+    assert(
+        !forcedPlaywrightDescriptionPayload.searchDescription.includes('searchMode'),
+        'forced playwright description must not expose searchMode guidance'
+    );
+    assert(
+        !descriptionPayload.searchDescription.includes('searchMode'),
+        'auto without Playwright parameters must not expose searchMode guidance'
+    );
+
+    // auto 且客户端可加载：暴露 searchMode 参数；强制模式不暴露。
+    const searchModeParamOutput = runModuleWithEnv(
+        `
+            import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+            const { createOpenWebSearchRuntime } = await import('./build/runtime/createRuntime.js');
+            const { setupTools } = await import('./build/tools/setupTools.js');
+            const runtime = createOpenWebSearchRuntime();
+            const server = new McpServer({ name: 'test', version: '1.0.0' });
+            setupTools(server, runtime);
+            const shape = server._registeredTools.search.inputSchema?._def?.shape
+                ?? server._registeredTools.search.inputSchema?.shape;
+            const keys = shape ? Object.keys(typeof shape === 'function' ? shape() : shape) : Object.keys(server._registeredTools.search.inputSchema?._def?.shape?.() ?? {});
+            console.log(JSON.stringify({ searchToolParamNames: keys }, null, 2));
+        `,
+        {
+            SEARCH_MODE: 'auto',
+            PLAYWRIGHT_WS_ENDPOINT: 'ws://127.0.0.1:9999/',
+            PLAYWRIGHT_MODULE_PATH: 'test-assets/fake-playwright-client.cjs'
+        }
+    );
+    const searchModeParamPayload = parseJsonBlock(searchModeParamOutput) as { searchToolParamNames: string[] };
+    assert(
+        searchModeParamPayload.searchToolParamNames.includes('searchMode'),
+        'search tool should expose searchMode when SEARCH_MODE=auto and Playwright is available'
+    );
+
+    const hiddenParamOutput = runModuleWithEnv(
+        `
+            import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+            const { createOpenWebSearchRuntime } = await import('./build/runtime/createRuntime.js');
+            const { setupTools } = await import('./build/tools/setupTools.js');
+            const runtime = createOpenWebSearchRuntime();
+            const server = new McpServer({ name: 'test', version: '1.0.0' });
+            setupTools(server, runtime);
+            const shape = server._registeredTools.search.inputSchema?._def?.shape
+                ?? server._registeredTools.search.inputSchema?.shape;
+            const keys = shape ? Object.keys(typeof shape === 'function' ? shape() : shape) : Object.keys(server._registeredTools.search.inputSchema?._def?.shape?.() ?? {});
+            console.log(JSON.stringify({ searchToolParamNames: keys }, null, 2));
+        `,
+        {
+            SEARCH_MODE: 'playwright',
+            PLAYWRIGHT_MODULE_PATH: '',
+            PLAYWRIGHT_PACKAGE: '',
+            PLAYWRIGHT_WS_ENDPOINT: '',
+            PLAYWRIGHT_CDP_ENDPOINT: '',
+            PLAYWRIGHT_EXECUTABLE_PATH: ''
+        }
+    );
+    const hiddenParamPayload = parseJsonBlock(hiddenParamOutput) as { searchToolParamNames: string[] };
+    assert(
+        !hiddenParamPayload.searchToolParamNames.includes('searchMode'),
+        'search tool must not expose searchMode in forced modes'
+    );
+
+    console.log('✅ MCP config-driven engine and mode behavior remains compatible');
+}
+
+async function main(): Promise<void> {
+    await testSearchToolReturnsCompatiblePayload();
+    await testSetupToolsUsesRuntimeConfigDefaults();
+    testSearchSchemaSupportsHackerNews();
+    await testSearchToolPassesSearchModeOverride();
+    await testSearchToolAutoModeUsesRuntimeDefault();
+    await testFetchWebToolPassesReadabilityFlags();
+    testCustomToolNamesAndFallbacks();
+    testConfigDrivenEngineSelectionAndMode();
+    console.log('\nMCP adapter tests passed.');
+}
+
+main()
+    .then(() => {
+        process.exit(0);
+    })
+    .catch((error) => {
+        console.error(error);
+        process.exit(1);
+    });
