@@ -11,6 +11,7 @@ class CutState(TypedDict, total=False):
                                     #  scene_cuts, shots:[{idx,start,end,cut_score,motion,
                                     #  frame_times}], description(视频镜头描述)}
     segments: list[dict]            # 文案切段: {text, mood, duration, keywords}
+    narrative: dict                 # 全篇章节、叙事角色、段落顺序与确定性分段建议
     timeline: list[dict]            # 粗剪时间线: {seq, media, kind, source, use_duration,
                                     #  start_offset, segment_text, note}
     critique: dict
@@ -34,7 +35,7 @@ PLAN_SYSTEM = """你是资深短视频剪辑师兼分镜师。你理解粗剪的
 - 末段负责"结尾"：收束或留钩子；
 - 每段时长 = 该段旁白朗读时长（中文约每秒 4.5 字），允许 ±15% 浮动。
 只输出 JSON，结构：
-{"segments":[{"text":"旁白原文","mood":"情绪/节奏","role":"开头|发展|高潮|收尾","intensity":1到5数字,"duration":建议秒数(数字),"kw_cn":[".."],"kw_en":[".."]}]}
+{"segments":[{"text":"旁白原文（必须逐字保留，所有段按顺序拼接须与输入完全一致）","mood":"情绪/节奏","narrative_role":"钩子|铺垫|证据|转折|高潮|收束","visual_goal":"该段画面需要表达什么","required_entities":["必须出现的实体"],"acceptable_alternatives":["可接受的替代表达"],"role":"开头|发展|高潮|收尾","intensity":1到5数字,"duration":建议秒数(数字),"kw_cn":[".."],"kw_en":[".."]}]}
 时长合计尽量等于 文案朗读时长 的 0.8~1.2 倍（中文约每秒 4~5 字）。"""
 
 MATCH_SYSTEM = """你是粗剪时间线编排师。粗剪的目标是搭好叙事结构：按"开头-发展-高潮-结尾"
