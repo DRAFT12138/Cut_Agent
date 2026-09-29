@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -32,10 +33,19 @@ def cmd_run(args) -> int:
     if not media_folder.is_dir():
         print(f"素材目录不存在: {media_folder}", file=sys.stderr)
         return 2
+    agent_decisions = None
+    if args.agent_decisions:
+        from .agent_tools import load_decisions
+        from .config import WORK_DIR
+        from .media import probe_media
+        media = [{key: value for key, value in vars(item).items() if key != "path"}
+                 for item in probe_media(media_folder, cache_dir=WORK_DIR / "media_cache")]
+        agent_decisions = load_decisions(args.agent_decisions, media, copy)
     runs.recover_interrupted()
     handle, _ = runs.start_run(str(media_folder), copy, seed=args.seed,
                                options={"preview": args.preview, "platform": args.platform,
-                                        "finishing_llm": not args.no_finishing_llm},
+                                        "finishing_llm": not args.no_finishing_llm,
+                                        "agent_decisions": agent_decisions or {}},
                                sync=args.sync)
     print(f"run: {handle.run_id}")
     if args.sync:
@@ -141,6 +151,21 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_agent_context(args) -> int:
+    """Export JSON that Codex/Claude Code can inspect without an LLM API."""
+    from .agent_tools import build_context
+    payload = build_context(args.media, _read_copy(args.copy))
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    if args.output == "-":
+        sys.stdout.write(rendered)
+    else:
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered, encoding="utf-8")
+        print(output.resolve())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Cut Agent 粗剪流水线")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -153,7 +178,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--preview", action="store_true", help="额外生成带段号的预览片")
     p.add_argument("--platform", choices=["douyin", "xiaohongshu", "bilibili"], default="douyin")
     p.add_argument("--no-finishing-llm", action="store_true", help="精剪指导只用离线规则")
+    p.add_argument("--agent-decisions", metavar="JSON",
+                   help="使用 Codex/Claude Code 生成的 JSON 决策代替分段、编排和配乐模型调用")
     p.set_defaults(fn=cmd_run)
+
+    p = sub.add_parser("agent-context", help="为 Codex/Claude Code 导出素材、缩略图和决策契约 JSON")
+    p.add_argument("--media", required=True, help="素材文件夹路径")
+    p.add_argument("--copy", required=True, help="文案：文件路径或内联文本")
+    p.add_argument("--output", default="agent-context.json", help="输出 JSON 路径；- 表示 stdout")
+    p.set_defaults(fn=cmd_agent_context)
 
     p = sub.add_parser("resume", help="从断点恢复 run（暂停/断电/失败）")
     p.add_argument("run_id")

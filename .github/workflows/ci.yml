@@ -8,36 +8,102 @@ permissions:
   contents: read
 
 jobs:
-  python:
+  python-fast:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.14']
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked --group dev
+      - name: Fast tests (no codecs)
+        run: uv run pytest -q -m 'not media'
+      - name: Static and format checks
+        run: |
+          uv run ruff check src tests tools/build_web_assets.py tools/check_release.py tools/smoke_distribution.py tools/verify_ui.py
+          uv run ruff format --check tools/build_web_assets.py tools/check_release.py tools/smoke_distribution.py tools/verify_ui.py
+
+  media:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.12'
-      - name: Install FFmpeg and uv
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          python -m pip install uv
-      - name: Install and test
-        run: |
-          uv sync --locked --group dev
-          uv run pytest -q
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: ffmpeg -version | head -1 && ffprobe -version | head -1
+      - run: uv sync --locked --group dev
+      - run: uv run pytest -q -m media
 
-  web:
+  web-and-release:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - name: Install, test, and build
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: corepack enable && uv sync --locked --group dev
+      - run: corepack pnpm install --frozen-lockfile && corepack pnpm test && corepack pnpm build
+        working-directory: web
+      - name: Ensure embedded assets match the web build
+        run: diff -qr web/dist src/cut_agent/web_dist
+      - name: Build and inspect distributions
+        run: uv build && uv run python tools/check_release.py
+      - name: Install wheel without the source tree and smoke-test service
         run: |
-          corepack enable
-          corepack pnpm install --frozen-lockfile
-          corepack pnpm test
-          corepack pnpm build
+          python -m venv /tmp/cut-agent-release
+          /tmp/cut-agent-release/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/cut-agent-release/bin/cut-agent --help
+          /tmp/cut-agent-release/bin/cut-agent serve --port 8090 >/tmp/cut-agent.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in {1..30}; do curl -fsS http://127.0.0.1:8090/ >/tmp/index.html && break; sleep 1; done
+          grep -q '<div id="root"></div>' /tmp/index.html
+          curl -fsS http://127.0.0.1:8090/api/stages | grep -q 'scan_media'
+
+  installed-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+      - run: uv sync --locked --group dev
+      - run: uv build --wheel
+      - shell: bash
+        run: uv run python tools/smoke_distribution.py dist/*.whl
+
+  browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: corepack enable && uv sync --locked --group dev
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run python make_sample.py
+      - run: uv run python tools/verify_ui.py smoke --artifacts work/verification/logs
+      - if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: browser-failure-evidence
+          path: work/verification

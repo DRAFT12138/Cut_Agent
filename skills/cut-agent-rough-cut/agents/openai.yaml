@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cut Agent Rough Cut"
+  short_description: "Build a rough cut with local Cut Agent tools"
+  default_prompt: "Use $cut-agent-rough-cut to inspect my media and create an editable rough-cut plan."

@@ -1,6 +1,6 @@
 # Cut Agent
 
-[English](README.md) · [中文使用说明](docs/usage.zh-CN.md) · [English user guide](docs/usage.md)
+[English](README.md) · [中文使用说明](docs/usage.zh-CN.md) · [下一步工作](docs/TODO.zh-CN.md) · [English user guide](docs/usage.md)
 
 Cut Agent 把**视频或图片素材文件夹 + 文案**整理成可编辑的粗剪方案。你可以在本地 Web 工作台核对镜头、调整时间线、比较 A/B 版本、按需生成带段号的预览，并导出给精剪人员使用的交接包。
 
@@ -15,20 +15,17 @@ Cut Agent 把**视频或图片素材文件夹 + 文案**整理成可编辑的粗
 - 在来源可用时检索补充画面与配乐；失败时记录待人工处理项。
 - 在本地 Web 工作台编辑时间线、生成 A/B 版本、暂停和恢复任务。
 - 导出精剪指导与可离线阅读的交接 ZIP。原始拍摄素材、下载的媒体源文件需要另行交给剪辑人员。
+- 可由 Codex、Claude Code 等编码代理读取素材上下文并提交粗剪决策，无需另配模型 API。
 
 ## 快速开始
 
-**环境要求：** Python 3.10–3.14、[uv](https://docs.astral.sh/uv/)、已加入 `PATH` 的 FFmpeg 和 FFprobe；构建 Web 界面需要 Node.js 与 Corepack。建议配置 OpenAI 兼容的聊天模型接口；没有模型时会使用规则降级，并在任务中标明。Chrome 与可选搜索守护进程可改善网络素材检索。
+**环境要求：** Linux 或 Windows、Python 3.10–3.14，以及已加入 `PATH` 的 FFmpeg 和 FFprobe 5+。正式 Python 发行物已包含 Web 界面；只有前端开发需要 Node.js 与 Corepack。建议配置 OpenAI 兼容的聊天模型接口；没有模型时会使用规则降级，并在任务中标明。Chrome 与可选搜索守护进程可改善网络素材检索。
 
 ```bash
 git clone https://github.com/DRAFT12138/Cut_Agent.git
 cd Cut_Agent
 uv sync
 uv run python make_sample.py
-cd web
-corepack pnpm install --frozen-lockfile
-corepack pnpm build
-cd ..
 uv run cut-agent serve --port 8090
 ```
 
@@ -39,7 +36,20 @@ uv run cut-agent run --media sample_media --copy sample_copy.txt --seed 7
 uv run cut-agent list
 ```
 
-Windows 构建完成后可用 `cd ..` 或 `Set-Location ..` 返回仓库根目录。不使用 uv 时，运行 `python -m pip install -e .`，再通过 `python -m cut_agent.cli ...` 调用。本仓库不附带模型、FFmpeg、生成的媒体文件或预构建 Web 界面。
+不使用 uv 时，运行 `python -m pip install .`，再通过 `python -m cut_agent.cli ...` 调用。Python 发行物已包含 Web 界面；本仓库不附带模型、FFmpeg 或生成的媒体文件。
+
+### 使用 Codex / Claude Code 代替模型 API
+
+先导出素材上下文，让编码代理查看其中列出的代表帧并生成 decisions JSON，再执行粗剪：
+
+```bash
+uv run cut-agent agent-context --media sample_media --copy sample_copy.txt --output agent-context.json
+uv run cut-agent run --media sample_media --copy sample_copy.txt \
+  --agent-decisions agent-decisions.json --no-finishing-llm --preview
+```
+
+完整代理流程与 JSON 契约见 [`cut-agent-rough-cut` Skill](skills/cut-agent-rough-cut/SKILL.md)。
+可将该目录复制到 Codex 的 `${CODEX_HOME:-~/.codex}/skills/`，或交给其他支持 `SKILL.md` 的编码代理加载；即使不安装 Skill，也能直接使用上述 CLI 文件协议。
 
 ## 模型与可选服务
 
