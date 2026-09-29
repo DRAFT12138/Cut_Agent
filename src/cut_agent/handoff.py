@@ -74,6 +74,16 @@ def build(run_id: str) -> SpooledTemporaryFile:
             }
             assets = _local_links(documents)
             paths = {name: _file(root, name) for name in (*_FILES, *sorted(assets))}
+            for row in plan.get("timeline", []):
+                if row.get("source") != "generated" or row.get("kind") != "html":
+                    continue
+                generated = (root / "generated").resolve()
+                pages = row.get("html_pages") or [{"path": row.get("local_path")}]
+                for page in pages:
+                    source = Path(str(page.get("path", ""))).resolve()
+                    if not source.is_relative_to(generated) or not source.is_file() or source.suffix.lower() != ".html":
+                        raise runctl.RunError("HTML 动画源文件缺失或越界")
+                    paths[f"generated/{source.name}"] = source
             source_dir = plan.get("media_folder") or "未记录"
             readme = ("# 精剪交接说明\n\n"
                       f"任务：{run_id}；方案修订：{plan.get('revision', 0)}。\n\n"
@@ -83,6 +93,7 @@ def build(run_id: str) -> SpooledTemporaryFile:
                       "《plan.json》和《cut_lines.txt》可用于核对时间线或供后续工具读取；"
                       "执行清单每行对应一段画面，并列出源入出点、成片入出点及素材状态。\n\n"
                       "配图与文档保持原有相对路径；若方案中链接了粗剪预览，预览也已打包。"
+                      "HTML 动画源文件位于 generated/，可再次用浏览器逐帧渲染。"
                       "原始拍摄素材、外部网络素材和配乐源文件不在包内，需要单独携带并在剪辑软件中重新定位。\n\n"
                       f"原始素材目录（仅作定位参考）：`{source_dir}`\n")
             with ZipFile(archive, "w", allowZip64=True) as bundle:

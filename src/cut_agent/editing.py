@@ -60,7 +60,31 @@ def validate(plan: dict) -> dict:
             raise runctl.RunError("入点必须是非负数")
         if not math.isfinite(offset) or offset < 0:
             raise runctl.RunError("入点必须是有限非负数")
-        if row.get("source", "local") == "local":
+        source = row.get("source", "local")
+        if source == "generated":
+            if row.get("kind") != "html" or not isinstance(row.get("local_path"), str):
+                raise runctl.RunError(f"第 {i} 行不是有效的 HTML 动画素材")
+            if (row.get("width"), row.get("height")) not in ((1920, 1080), (3840, 2160)):
+                raise runctl.RunError(f"第 {i} 行 HTML 动画分辨率无效")
+            asset = Path(row["local_path"]).resolve()
+            # Persisted plans do not need to expose their run id: all generated files
+            # must at least live under a directory named generated and exist.
+            if asset.parent.name != "generated" or asset.suffix.lower() != ".html" or not asset.is_file():
+                raise runctl.RunError(f"第 {i} 行 HTML 动画文件无效")
+            pages = row.get("html_pages") or [{"path": row["local_path"], "duration": row["use_duration"]}]
+            if not isinstance(pages, list) or not 1 <= len(pages) <= 6:
+                raise runctl.RunError(f"第 {i} 行 HTML 动画画面数量无效")
+            page_duration = 0.0
+            for page in pages:
+                page_path = Path(str(page.get("path", ""))).resolve() if isinstance(page, dict) else Path()
+                if (not isinstance(page, dict) or page_path.parent.name != "generated"
+                        or page_path.suffix.lower() != ".html" or not page_path.is_file()
+                        or _positive(page.get("duration")) <= 0):
+                    raise runctl.RunError(f"第 {i} 行包含无效 HTML 画面")
+                page_duration += float(page["duration"])
+            if not math.isclose(page_duration, row["use_duration"], abs_tol=.001, rel_tol=0):
+                raise runctl.RunError(f"第 {i} 行 HTML 画面时长合计不匹配")
+        elif source == "local":
             item = media.get(row.get("media"))
             if item is None:
                 raise runctl.RunError(f"未知本地素材：{row.get('media')}")
@@ -71,6 +95,61 @@ def validate(plan: dict) -> dict:
         row.update(start_offset=offset, start=offset, end=offset + row["use_duration"])
         result["timeline"][i - 1] = align_source(row, media.get(row.get("media")))
     return result
+
+
+def add_html_motion(run_id: str, *, after: int, prompt: str, duration: float,
+                    resolution: str = "4k", expected_revision: int | None = None,
+                    preview: bool = False, music_mode: str = "auto",
+                    bpm: float | None = None) -> dict:
+    """Generate an HTML motion clip and insert it after a timeline row."""
+    duration = _positive(duration)
+    if duration > 30:
+        raise runctl.RunError("HTML 动画时长不能超过 30 秒")
+    if not isinstance(after, int) or isinstance(after, bool):
+        raise runctl.RunError("插入位置必须是行号")
+    if len(prompt) > 4000:
+        raise runctl.RunError("动画要求不能超过 4000 字")
+    from .html_motion import RESOLUTIONS
+    if resolution not in RESOLUTIONS:
+        raise runctl.RunError("动画分辨率仅支持 1080p 或 4k")
+    if music_mode not in ("auto", "continuous", "transition", "none"):
+        raise runctl.RunError("未知的过场音乐模式")
+    if bpm is not None and (not math.isfinite(bpm) or not 30 <= bpm <= 300):
+        raise runctl.RunError("BPM 必须在 30 到 300 之间")
+    with runctl.RunLease(run_id):
+        exports.recover(runctl.run_dir(run_id))
+        plan = load_plan(run_id)
+        if not 0 <= after <= len(plan["timeline"]):
+            raise runctl.RunError("插入位置超出时间线范围")
+        revision = plan.get("revision", 0)
+        if expected_revision is not None and expected_revision != revision:
+            raise runctl.RunError("计划已被修改，请刷新后重试")
+        from . import html_motion
+        before = plan["timeline"][after - 1] if after else None
+        following = plan["timeline"][after] if after < len(plan["timeline"]) else None
+        if before is None or following is None:
+            raise runctl.RunError("过场必须插入两段相邻视频之间")
+        if before.get("kind") != "video" or following.get("kind") != "video":
+            raise runctl.RunError("请选择两段相邻视频之间的位置")
+        transition_start = sum(float(row.get("use_duration", 0)) for row in plan["timeline"][:after])
+        transition_plan, documents = html_motion.generate_pages(
+            prompt, duration, before, following, copy=str(plan.get("copy", "")), resolution=resolution,
+            music=plan.get("music") if isinstance(plan.get("music"), dict) else {},
+            music_mode=music_mode, bpm=bpm, transition_start=transition_start)
+        paths = [html_motion.save(runctl.run_dir(run_id), document) for document in documents]
+        pages = [{"path": str(path), "duration": scene["duration"], "brief": scene["brief"]}
+                 for path, scene in zip(paths, transition_plan["scenes"], strict=True)]
+        path = paths[0]
+        width, height = RESOLUTIONS[resolution]
+        row = {"seq": after + 1, "media": path.name, "kind": "html", "source": "generated",
+               "local_path": str(path), "start_offset": 0, "use_duration": duration,
+               "width": width, "height": height, "resolution": resolution,
+               "html_pages": pages, "transition_plan": transition_plan,
+               "music_sync": transition_plan.get("music_analysis", {}),
+               "segment_text": "", "role": "过场", "intensity": 3,
+               "note": transition_plan.get("concept") or prompt.strip() or "LLM 生成的 HTML 过场动画"}
+        operation = {"op": "insert_generated", "after": after, "row_data": row}
+        return _rebuild_locked(run_id, operation, expected_revision, preview=preview)
 
 
 def patch_plan(plan: dict, operation: dict) -> dict:
@@ -107,6 +186,14 @@ def patch_plan(plan: dict, operation: dict) -> dict:
             rows[target] = replacement
         else:
             rows.append(replacement)
+    elif kind == "insert_generated":
+        after = operation.get("after")
+        row = operation.get("row_data")
+        if not isinstance(after, int) or isinstance(after, bool) or not 0 <= after <= len(rows):
+            raise runctl.RunError("插入位置超出时间线范围")
+        if not isinstance(row, dict) or row.get("source") != "generated" or row.get("kind") != "html":
+            raise runctl.RunError("无效的 HTML 动画行")
+        rows.insert(after, deepcopy(row))
     else:
         raise runctl.RunError(f"未知编辑操作：{kind}")
     if kind in ("move", "drop"):

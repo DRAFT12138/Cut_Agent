@@ -14,6 +14,7 @@ Cut Agent turns a folder of video or image clips and a script into an **editable
 - Splits the script, proposes a timeline, and records editable `plan.json` plus a readable rough-cut document.
 - Searches for supplemental footage and music when their sources are available; records gaps for manual review when they are not.
 - Supports timeline edits, A/B variants, pause/resume, and checkpoint recovery in a local web workspace.
+- Lets the LLM plan beat-aware animated scenes for continuous or transition-only music, author an offline HTML/CSS/JavaScript page for each, and insert the frame-rendered transition without an image/video generation model.
 - Exports a finishing guide and an offline-readable handoff ZIP. Source footage and downloaded media must be supplied separately to the editor.
 - Lets Codex, Claude Code, and other coding agents inspect media context and author rough-cut decisions without a separate model API.
 

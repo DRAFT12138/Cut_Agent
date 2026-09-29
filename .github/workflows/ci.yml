@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.14']
+        python: ['3.12', '3.14']
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -46,13 +46,17 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: '3.12'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+          run_install: false
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-      - run: corepack enable && uv sync --locked --group dev
-      - run: corepack pnpm install --frozen-lockfile && corepack pnpm test && corepack pnpm build
+      - run: uv sync --locked --group dev
+      - run: pnpm install --frozen-lockfile && pnpm test && pnpm build
         working-directory: web
       - name: Ensure embedded assets match the web build
         run: diff -qr web/dist src/cut_agent/web_dist
@@ -98,7 +102,7 @@ jobs:
         with:
           node-version: '24'
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - run: corepack enable && uv sync --locked --group dev
+      - run: uv sync --locked --group dev
       - run: uv run playwright install --with-deps chromium
       - run: uv run python make_sample.py
       - run: uv run python tools/verify_ui.py smoke --artifacts work/verification/logs

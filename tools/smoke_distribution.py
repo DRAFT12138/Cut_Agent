@@ -22,10 +22,26 @@ def main() -> None:
         scripts = environment / ("Scripts" if os.name == "nt" else "bin")
         python = scripts / ("python.exe" if os.name == "nt" else "python")
         command = scripts / ("cut-agent.exe" if os.name == "nt" else "cut-agent")
-        subprocess.run([str(python), "-m", "pip", "install", str(args.wheel.resolve())], check=True)
-        subprocess.run([str(command), "--help"], check=True, stdout=subprocess.PIPE)
+        # Windows GitHub runners otherwise choose cp1252 for redirected console
+        # output, while the localized CLI help contains Chinese characters.
+        child_env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+        subprocess.run([str(python), "-m", "pip", "install", str(args.wheel.resolve())], check=True, env=child_env)
+        subprocess.run(
+            [str(command), "--help"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=child_env,
+            text=True,
+            encoding="utf-8",
+        )
         server = subprocess.Popen(
-            [str(command), "serve", "--port", "8099"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+            [str(command), "serve", "--port", "8099"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=child_env,
+            text=True,
+            encoding="utf-8",
         )
         try:
             deadline = time.monotonic() + 30

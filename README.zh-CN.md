@@ -14,6 +14,7 @@ Cut Agent 把**视频或图片素材文件夹 + 文案**整理成可编辑的粗
 - 拆分文案、生成时间线，保存可编辑的 `plan.json` 和可阅读的粗剪文档。
 - 在来源可用时检索补充画面与配乐；失败时记录待人工处理项。
 - 在本地 Web 工作台编辑时间线、生成 A/B 版本、暂停和恢复任务。
+- 手动选择相邻视频，让 LLM 结合全文、前后旁白与配乐节奏规划 1～6 个动态画面，再编写多个离线 HTML/CSS/JS 页面并合成最高 4K 的过场；支持持续配乐或单独过场音乐的拍点对齐。
 - 导出精剪指导与可离线阅读的交接 ZIP。原始拍摄素材、下载的媒体源文件需要另行交给剪辑人员。
 - 可由 Codex、Claude Code 等编码代理读取素材上下文并提交粗剪决策，无需另配模型 API。
 
@@ -25,6 +26,7 @@ Cut Agent 把**视频或图片素材文件夹 + 文案**整理成可编辑的粗
 git clone https://github.com/DRAFT12138/Cut_Agent.git
 cd Cut_Agent
 uv sync
+uv run playwright install chromium
 uv run python make_sample.py
 uv run cut-agent serve --port 8090
 ```
