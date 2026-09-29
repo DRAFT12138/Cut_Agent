@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ from .shots import select_shot, shot_inventory, number
 from .source_timing import align_timeline
 from .craft import structure, critique
 from .narrative import plan as plan_narrative
+from .narration import bind_segments, import_source as import_narration, timing as narration_timing
 from .storyboard import build_storyboard, markdown as storyboard_markdown
 from .mediacache import MediaCache
 from .webfetch import acquire as acquire_web
@@ -283,7 +285,20 @@ def plan_segments(state: CutState) -> dict:
                          "kw_cn": [p[:8]], "kw_en": ["b-roll"]})
     norm, narrative = plan_narrative(copy, norm)
     norm = structure(norm)
-    return {"segments": norm, "narrative": narrative,
+    ctx = _ctx(state)
+    narration = None
+    narration_path = ctx.options.get("narration_audio") if ctx is not None else None
+    if narration_path:
+        try:
+            source = import_narration(narration_path)
+            narration = narration_timing(source, ctx.options.get("narration_words"))
+            norm = bind_segments(norm, narration)
+            if narration["status"] != "ready":
+                _degraded(state, narration["reason"])
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            narration = {"version": 1, "status": "unavailable", "reason": str(exc)}
+            _degraded(state, f"旁白时序不可用：{exc}")
+    return {"segments": norm, "narrative": narrative, "narration": narration,
             "log": state.get("log", []) + [f"文案切成 {len(norm)} 段"]}
 
 
