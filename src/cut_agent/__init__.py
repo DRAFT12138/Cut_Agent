@@ -10,4 +10,6 @@ CLI 入口见 cli.py，Web 控制台见 server.py（Phase 0）。
 from .graph import run
 from .runs import list_runs, resume_run, start_run, status_of
 
-__all__ = ["run", "start_run", "resume_run", "status_of", "list_runs"]
+__version__ = "0.2.0"
+
+__all__ = ["__version__", "list_runs", "resume_run", "run", "start_run", "status_of"]

@@ -1,6 +1,6 @@
 [project]
 name = "cut-agent"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Local video rough-cut planning workspace with editable timelines and finishing handoff"
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
@@ -34,10 +34,28 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = {attr = "cut_agent.__version__"}
+
+[tool.setuptools.package-data]
+cut_agent = ["web_dist/**/*"]
+
 [dependency-groups]
 dev = [
+    "build>=1.2",
     "pytest>=9.1.1",
+    "ruff>=0.13",
 ]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "media: requires real FFmpeg and FFprobe binaries",
+]
