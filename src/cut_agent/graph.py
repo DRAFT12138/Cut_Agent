@@ -28,6 +28,7 @@ from .checkpoints import UnitStore, fingerprint
 from .shots import select_shot, shot_inventory, number
 from .source_timing import align_timeline
 from .craft import structure, critique
+from .narrative import plan as plan_narrative
 from .storyboard import build_storyboard, markdown as storyboard_markdown
 from .mediacache import MediaCache
 from .webfetch import acquire as acquire_web
@@ -280,8 +281,9 @@ def plan_segments(state: CutState) -> dict:
         for p in parts[:10]:
             norm.append({"text": p, "mood": "", "duration": round(max(2.0, len(p) / 4.5), 1),
                          "kw_cn": [p[:8]], "kw_en": ["b-roll"]})
+    norm, narrative = plan_narrative(copy, norm)
     norm = structure(norm)
-    return {"segments": norm,
+    return {"segments": norm, "narrative": narrative,
             "log": state.get("log", []) + [f"文案切成 {len(norm)} 段"]}
 
 
@@ -300,8 +302,12 @@ def build_timeline(state: CutState) -> dict:
     media_lines = shot_inventory(media)
     seg_lines = []
     for i, s in enumerate(segs, 1):
-        seg_lines.append(f"{i}. {s.get('text','')}（情绪: {s.get('mood','')}，约{s.get('duration',0)}s，关键词: {', '.join(s.get('kw_en',[])) or ', '.join(s.get('kw_cn',[]))}）")
-    user = "本地素材清单：\n" + "\n".join(media_lines) + "\n\n文案分段：\n" + "\n".join(seg_lines)
+        seg_lines.append(f"{i}. [{s.get('narrative_role', s.get('role', ''))}] {s.get('text','')}（视觉目标: {s.get('visual_goal','')}；必须实体: {', '.join(s.get('required_entities', [])) or '无'}；情绪: {s.get('emotion', s.get('mood',''))}；约{s.get('duration',0)}s；关键词: {', '.join(s.get('kw_en',[])) or ', '.join(s.get('kw_cn',[]))}）")
+    narrative = state.get("narrative", {})
+    chapter_lines = [f"{chapter['title']}({chapter['purpose']}): {', '.join(chapter['segment_ids'])}"
+                     for chapter in narrative.get("chapters", [])]
+    user = ("全篇结构（镜头选择不得破坏钩子、推进、转折和结尾回收）：\n" + "\n".join(chapter_lines)
+            + "\n\n本地素材清单：\n" + "\n".join(media_lines) + "\n\n文案分段：\n" + "\n".join(seg_lines))
     _checkpoint(state, "build_timeline")
     data = _agent_decision(state, "timeline")
     _emit(state, "build_timeline", "progress", done=0, total=1,
@@ -770,6 +776,12 @@ def write_doc(state: CutState) -> dict:
     elif music.get("download_error"):
         md.append(f"- 下载失败：{music['download_error']}（请手动按上面关键词到免版权站获取）")
     report = state.get("critique") or {}
+    narrative = state.get("narrative") or {}
+    md.append("\n## 叙事结构\n")
+    for chapter in narrative.get("chapters", []):
+        md.append(f"- {chapter['title']}（{chapter['purpose']}）：" + "、".join(chapter["segment_ids"]))
+    for suggestion in narrative.get("suggestions", []):
+        md.append(f"- 建议 {suggestion['type']}：{'、'.join(suggestion['segment_ids'])} — {suggestion['reason']}")
     md.append("\n## 自检报告\n")
     md.append("- 结构弧线：" + " → ".join(str(x) for x in report.get("intensity_arc", [])))
     md.append("- " + report.get("disclosure", "尚未执行自检"))
@@ -796,7 +808,7 @@ def write_doc(state: CutState) -> dict:
         "music_cues": cues,
         "platform": state.get("platform") or (ctx.options.get("platform", "douyin") if ctx else "douyin"),
         **{key: state.get(key) for key in
-           ("media_folder", "copy", "media", "segments", "timeline", "web_assets", "music", "critique")},
+           ("media_folder", "copy", "media", "segments", "narrative", "timeline", "web_assets", "music", "critique")},
         "segments": state.get("segments") or [], "timeline": timeline,
         "web_assets": web_assets, "music": music, "critique": report,
         "doc_path": str(doc), "line_doc_path": str(line_doc),
@@ -804,7 +816,8 @@ def write_doc(state: CutState) -> dict:
 
     return {"doc_path": str(doc), "line_doc_path": str(line_doc),
             "timeline": timeline,
-            "segments": state.get("segments") or [], "web_assets": web_assets, "music": music,
+            "segments": state.get("segments") or [], "narrative": narrative,
+            "web_assets": web_assets, "music": music,
             "critique": report,
             "storyboard": storyboard,
             "preview": preview,
