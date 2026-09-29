@@ -16,8 +16,14 @@ Use Cut Agent's file-based agent interface. Do not invent media names or claim t
    ```
 
 2. Read `agent-context.json`. Inspect every image listed in `thumbnail_samples`; use each sample's `time` when choosing a video offset. Use the available image-viewing tool—filenames and metadata alone are insufficient for visual matching.
-3. Write `agent-decisions.json` following [references/decisions.md](references/decisions.md). Preserve and completely cover the narration, reference `segment_id` and `media_id`, avoid unnecessary repeated shots, and keep video ranges within source duration.
-4. Run without a model endpoint:
+3. Work as an evidence-driven editing loop rather than filling a fixed template:
+   - observe representative frames and source timing;
+   - form a pacing/visual strategy;
+   - propose one or more shots for each narration segment;
+   - check coverage, source bounds, repetition, and rhythm;
+   - revise when a check fails.
+4. Write `agent-decisions.json` following [references/decisions.md](references/decisions.md). Preserve and completely cover the narration, reference `segment_id` and `media_id`, and record material observations and choices in `trajectory`. Multiple shots may cover one segment when the pacing benefits; avoid cuts that have no editorial purpose.
+5. Run without a model endpoint:
 
    ```bash
    uv run cut-agent run \
@@ -25,13 +31,13 @@ Use Cut Agent's file-based agent interface. Do not invent media names or claim t
      --agent-decisions agent-decisions.json --no-finishing-llm --preview
    ```
 
-5. Report the run ID. Inspect `output/runs/<run-id>/plan.json`, the preview, and critique warnings. If the result needs adjustment, prefer `cut-agent edit`; regenerate the decisions only for structural changes.
+6. Report the run ID. Inspect `output/runs/<run-id>/plan.json`, the preview, critique warnings, and `agent/trajectory.json`. The same steps also appear in `log.jsonl` as `agent` events. If the result needs adjustment, prefer `cut-agent edit`; regenerate the decisions only for structural changes.
 
 ## Revise safely
 
 - Treat `agent-context.json` as source evidence and `agent-decisions.json` as the agent's authored proposal.
 - Never modify source media.
 - Prefer local media. Use an empty `media` plus `needs_web: true` only when no local shot fits.
-- Keep one timeline row per segment in the first pass.
+- Use the fewest shots that express the intended rhythm; one row per segment is a baseline, not a restriction.
 - State clearly when visual inspection is unavailable.
 - Do not add API keys or private scripts to the repository.

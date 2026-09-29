@@ -72,6 +72,12 @@ def cmd_status(args) -> int:
 
 def _print_meta(meta: dict) -> int:
     print(f"\nrun {meta['id']}  [{meta.get('status')}]")
+    obs = meta.get("observability", {})
+    if obs:
+        checkpoint = obs.get("last_checkpoint") or "-"
+        current = obs.get("current_stage") or "-"
+        print(f"  尝试: {obs.get('attempt', 1)}  恢复: {obs.get('recovery_count', 0)}  "
+              f"当前: {current}  最近断点: {checkpoint}  事件: {obs.get('latest_event_seq', 0)}")
     for s in meta.get("stages", []):
         mark = {"done": "✓", "degraded": "✓~", "running": "▶",
                 "paused": "⏸", "failed": "✗", "pending": "·"}.get(s.get("status"), "?")

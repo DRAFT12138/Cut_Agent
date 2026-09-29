@@ -174,9 +174,45 @@ def _seed_of(run_id: str) -> int | None:
     return int(s) if isinstance(s, (int, float)) else None
 
 
+def _attempt_of(run_id: str) -> int:
+    meta = read_json(_run_json_path(run_id)) or {}
+    return max(1, int(meta.get("attempt") or 1))
+
+
+def _history(meta: dict, entry: dict) -> list[dict]:
+    """Keep a bounded, durable audit of starts, interruptions, and resumes."""
+    previous = meta.get("recovery_history", [])
+    previous = previous if isinstance(previous, list) else []
+    return [*previous[-49:], {"ts": time.time(), **entry}]
+
+
 def _worker_log(run_id: str) -> EventLog:
     return EventLog(run_id, on_progress=lambda name, progress:
                     _stage_status(run_id, name, "running", progress=progress))
+
+
+def _record_agent_handoff(rd: Path, log: EventLog, options: dict) -> None:
+    """Persist an external agent's proposal and expose its reasoning as events.
+
+    The handoff is immutable run evidence rather than transient prompt context:
+    reviewers can inspect exactly what was proposed even after edits or resume.
+    """
+    decisions = options.get("agent_decisions") if isinstance(options, dict) else None
+    if not isinstance(decisions, dict) or not decisions:
+        return
+    evidence = rd / "agent"
+    write_json_atomic(evidence / "decisions.json", decisions)
+    trajectory = decisions.get("trajectory", [])
+    if isinstance(trajectory, list) and trajectory:
+        write_json_atomic(evidence / "trajectory.json", trajectory)
+        for index, step in enumerate(trajectory, 1):
+            if not isinstance(step, dict):
+                continue
+            action = str(step.get("action", "observation"))
+            decision = str(step.get("decision", ""))
+            log.event("build_timeline", "agent", step=step.get("step", index),
+                      action=action, decision=decision,
+                      msg=f"代理轨迹 {index}/{len(trajectory)} · {action}: {decision}")
 
 
 def _drive(run_id: str, control: RunControl, log: EventLog,
@@ -188,10 +224,12 @@ def _drive(run_id: str, control: RunControl, log: EventLog,
         ctx = graph.RunCtx(run_id=run_id, control=control, log=log,
                            run_dir=rd, seed=_seed_of(run_id),
                            options=(read_json(rd / "input.json") or {}).get("options", {}))
+        attempt = _attempt_of(run_id)
         for i, (name, fn) in enumerate(STAGES):
             if i < start_idx:
                 continue
             log.event(name, "status", what="start")
+            _update_run_json(run_id, current_stage=name, last_activity_at=time.time())
             _stage_status(run_id, name, "running", started_at=time.time(),
                           progress={"done": 0, "total": 1}, error=None)
             state["_ctx"] = ctx
@@ -216,10 +254,16 @@ def _drive(run_id: str, control: RunControl, log: EventLog,
                     "progress": progress, "elapsed": round(time.time() - t0, 1)}
             art["_stage"] = info
             write_json_atomic(stage_path(run_id, name), art)
+            log.event(name, "checkpoint", what="stage-committed", attempt=attempt,
+                      artifact=f"stages/{name}.json", elapsed=info["elapsed"],
+                      msg=f"阶段断点已提交：{name}")
             state.update(patch)
             _stage_status(run_id, name, **info, finished_at=time.time(), error=None)
+            _update_run_json(run_id, last_checkpoint=name, current_stage=None,
+                             last_activity_at=time.time())
         _update_run_json(run_id, status="done", resumable_from=None, error=None,
-                         pid=None, control_requested=None)
+                         pid=None, control_requested=None, current_stage=None,
+                         last_activity_at=time.time())
         log.event(STAGE_NAMES[-1], "status", what="run-done")
     except RunHalted:
         try:
@@ -243,7 +287,8 @@ def _record_failure(run_id: str, name: str, log: EventLog, exc: Exception) -> No
                          progress=log.progress.get(name, {"done": 0, "total": 1}))
         _update_run_json(run_id, status="failed", stages=entries,
                          resumable_from=_next_stage_name(run_id), error=error,
-                         pid=None, control_requested=None)
+                         pid=None, control_requested=None, current_stage=name,
+                         last_activity_at=time.time())
     except Exception:
         # Disk unavailable: the lease will still be released; a later recovery
         # scan uses ownership and checkpoints even while this PID remains alive.
@@ -260,6 +305,7 @@ def _halt(run_id: str, control: RunControl, log: EventLog, stage: str) -> None:
     _stage_status(run_id, stage, "paused")
     _update_run_json(run_id, status=kind, resumable_from=stage,
                      pid=None, control_requested=None,
+                     current_stage=stage, last_activity_at=time.time(),
                      error=("已取消（产物保留，可恢复）" if kind == "canceled"
                             else "已暂停，可恢复"))
     log.event(stage, "status", what=f"run-{kind}")
@@ -278,18 +324,24 @@ def start_run(media_dir: str, copy: str, *, seed: int | None = None,
     lease = runctl.RunLease(run_id)
     try:
         log = _worker_log(run_id)
+        run_options = options or {}
         write_json_atomic(rd / "input.json",
                           {"media_dir": str(media_dir), "copy": copy,
-                           "seed": seed, "options": options or {},
+                           "seed": seed, "options": run_options,
                            "media_snapshot": media_snapshot(media_dir),
                            "created": time.time()})
         _update_run_json(run_id, status="pending", worker_lock_version=1,
+                         attempt=1, recovery_count=0, recovery_history=[],
+                         current_stage=None, last_checkpoint=None,
                          stages=[{"name": n, "status": "pending"} for n in STAGE_NAMES],
                          config={"media_dir": str(media_dir), "seed": seed,
-                                 "options": options or {}})
+                                 "options": run_options})
         state = rebuild_state(run_id)
         handle = RunHandle(run_id, control, log, lease=lease)
         _update_run_json(run_id, status="running", pid=os.getpid())
+        log.event("run", "lifecycle", what="run-started", attempt=1,
+                  msg="执行尝试 1 已启动")
+        _record_agent_handoff(rd, log, run_options)
         if sync:
             _drive_and_release(handle, 0, state)
         else:
@@ -355,10 +407,21 @@ def _resume_locked(run_id: str, lease: runctl.RunLease) -> RunHandle:
     start_idx = first_incomplete(run_id)
     _invalidate_suffix(run_id, start_idx)
     state = rebuild_state(run_id)
+    completed = STAGE_NAMES[:start_idx]
+    attempt = max(1, int(meta.get("attempt") or 1)) + 1
+    history = _history(meta, {"kind": "resumed", "attempt": attempt,
+                              "from_stage": _next_stage_name(run_id),
+                              "reused_stages": completed})
     _update_run_json(run_id, status="running",
                      resumable_from=_next_stage_name(run_id), error=None,
                      pid=os.getpid(), worker_lock_version=1, control_requested=None,
-                     stages=_recovered_stages(run_id))
+                     stages=_recovered_stages(run_id), attempt=attempt,
+                     recovery_history=history, current_stage=_next_stage_name(run_id),
+                     last_activity_at=time.time())
+    log.event(_next_stage_name(run_id) or "run", "recovery", what="run-resumed",
+              attempt=attempt, from_stage=_next_stage_name(run_id),
+              reused_stages=completed,
+              msg=f"执行尝试 {attempt} 从断点恢复，复用 {len(completed)} 个阶段")
     handle = RunHandle(run_id, control, log)
     handle.lease = lease
     register_active(handle)
@@ -462,7 +525,10 @@ def recover_interrupted(run_id: str | None = None) -> list[str]:
                 _update_run_json(rid, status="interrupted" if idx < len(STAGES) else "done",
                                  created=inp.get("created", d.stat().st_mtime),
                                  resumable_from=_next_stage_name(rid), pid=None,
-                                 stages=_recovered_stages(rid), worker_lock_version=1)
+                                 stages=_recovered_stages(rid), worker_lock_version=1,
+                                 attempt=1, recovery_count=1 if idx < len(STAGES) else 0,
+                                 recovery_history=[{"ts": time.time(), "kind": "interrupted-detected",
+                                                    "from_stage": _next_stage_name(rid)}])
                 out.append(rid)
                 continue
             if not meta or not meta.get("id"):
@@ -474,14 +540,25 @@ def recover_interrupted(run_id: str | None = None) -> list[str]:
             if unowned or (status == "done" and incomplete):
                 rid = d.name
                 recovered = "interrupted" if incomplete else "done"
+                recovery_count = int(meta.get("recovery_count") or 0) + (1 if incomplete else 0)
+                history = _history(meta, {"kind": "interrupted-detected",
+                                          "attempt": max(1, int(meta.get("attempt") or 1)),
+                                          "from_stage": _next_stage_name(rid)})
                 _update_run_json(rid, status=recovered,
                                  stages=_recovered_stages(rid),
                                  resumable_from=_next_stage_name(rid),
                                  error="执行器退出或断点不完整，可从断点恢复" if incomplete else None,
-                                 pid=None, control_requested=None, worker_lock_version=1)
+                                 pid=None, control_requested=None, worker_lock_version=1,
+                                 current_stage=_next_stage_name(rid),
+                                 recovery_count=recovery_count,
+                                 recovery_history=history, last_activity_at=time.time())
                 try:
-                    EventLog(rid).event(_next_stage_name(rid) or "?",
-                                        "status", what=f"recovered-{recovered}")
+                    EventLog(rid).event(_next_stage_name(rid) or "?", "recovery",
+                                        what=f"recovered-{recovered}",
+                                        recovery_count=recovery_count,
+                                        resumable_from=_next_stage_name(rid),
+                                        msg="检测到执行中断，已定位可恢复断点" if incomplete
+                                        else "已从阶段断点确认任务完成")
                 except Exception:
                     pass
                 out.append(rid)
@@ -500,6 +577,14 @@ def status_of(run_id: str) -> dict:
     meta["resumable_from"] = meta.get("resumable_from") or _next_stage_name(run_id)
     meta["stages_done"] = sum(1 for s in meta.get("stages", [])
                               if s.get("status") in ("done", "degraded"))
+    meta["observability"] = {
+        "attempt": max(1, int(meta.get("attempt") or 1)),
+        "recovery_count": int(meta.get("recovery_count") or 0),
+        "current_stage": meta.get("current_stage"),
+        "last_checkpoint": meta.get("last_checkpoint"),
+        "last_activity_at": meta.get("last_activity_at"),
+        "latest_event_seq": EventLog(run_id).latest,
+    }
     if exports.pending(run_dir(run_id)):
         detail = meta.get("export_error")
         meta.update(export_pending=True, status="recovering",
@@ -543,6 +628,8 @@ def list_runs() -> list[dict]:
             "seed": inp.get("seed"),
             "comparison_group": (inp.get("options") or {}).get("comparison_group", meta["id"]),
             "resumable_from": meta.get("resumable_from") or _next_stage_name(meta["id"]),
+            "attempt": max(1, int(meta.get("attempt") or 1)),
+            "recovery_count": int(meta.get("recovery_count") or 0),
         })
     out.sort(key=lambda r: r.get("created") or 0, reverse=True)
     return out

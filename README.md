@@ -50,6 +50,7 @@ uv run cut-agent run --media sample_media --copy sample_copy.txt \
 ```
 
 See the repository's [`cut-agent-rough-cut` skill](skills/cut-agent-rough-cut/SKILL.md) for the workflow and decision contract.
+The current contract lets the agent assign multiple purposeful shots to one narration segment, but requires a reviewable decision trajectory. Each run preserves the proposal and trajectory under `output/runs/<run-id>/agent/` and mirrors trajectory steps into the live event stream for observation and later review.
 Copy that directory into `${CODEX_HOME:-~/.codex}/skills/` for Codex, or load it with another coding agent that supports `SKILL.md`. The CLI file protocol also works without installing the skill.
 
 ## Model and optional services
