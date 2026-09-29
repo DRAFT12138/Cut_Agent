@@ -36,6 +36,7 @@ from .mediacache import MediaCache
 from .webfetch import acquire as acquire_web
 from .finishing import build_guide, music_cues, markdown as finishing_markdown
 from .vision import VisionError, analyse_with_llm
+from .visual_index import build as build_visual_index
 from .websearch import WebSearchError, client as ows_client
 
 IMAGE_DEFAULT_SECONDS = 4.0   # 图片默认展示时长
@@ -158,10 +159,11 @@ def understand_media(state: CutState) -> dict:
         media = [{**row, "description": descriptions.get(row.get("name"), row.get("description", ""))}
                  for row in media]
     if _agent_decision(state, "segments") is not None:
-        return {"media": media,
+        return {"media": media, "visual_index": build_visual_index(media),
                 "log": state.get("log", []) + ["编码代理已提供素材描述，跳过视觉模型 API"]}
     if not VISION_ENABLED:
-        return {"media": media, "log": state.get("log", []) + ["视觉层已关闭（CUT_AGENT_VISION=0），跳过"]}
+        return {"media": media, "visual_index": build_visual_index(media),
+                "log": state.get("log", []) + ["视觉层已关闭（CUT_AGENT_VISION=0），跳过"]}
     media_folder = Path(state["media_folder"])
     ctx = _ctx(state)
     # 帧/候选缩略输出目录：run 目录（P8）；无 run（CLI 直调）时退回 work/vision 旧行为
@@ -181,7 +183,7 @@ def understand_media(state: CutState) -> dict:
         _checkpoint(state, "understand_media")
         src = media_folder / m["name"]
         from . import vision, config
-        key = {"version": 4, "path": str(src.resolve()),
+        key = {"version": 5, "path": str(src.resolve()),
                "media": {k: v for k, v in m.items() if k != "thumbnails"}, "file": fingerprint(src),
                "model": config.LLM_MODEL, "endpoint": config.LLM_BASE_URL,
                "vision": vision.geometry_settings()}
@@ -239,7 +241,7 @@ def understand_media(state: CutState) -> dict:
         units.write(key, record)
         shared.write(key, record)
         _emit(state, "understand_media", "progress", done=i, total=n, item=m["name"])
-    return {"media": enriched,
+    return {"media": enriched, "visual_index": build_visual_index(enriched),
             "log": state.get("log", []) + log_add}
 
 
