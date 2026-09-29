@@ -6,6 +6,13 @@ __pycache__/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.kdbx
+credentials.json
+secrets.json
 
 # Web 前端（Phase 0）：源码入库，构建产物与依赖不入库
 web/node_modules/
@@ -30,6 +37,9 @@ open-webSearch.zip
 work/
 output/
 owx_tmp/
+*.log
+*.sqlite
+*.sqlite3
 
 # 生成的示例素材（可用 make_sample.py 重新生成；保留 _thumbs 之外的原文件也不入库）
 sample_media/*
