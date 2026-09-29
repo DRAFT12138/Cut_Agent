@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { App, Button, Card, InputNumber, Select, Space, Tag, Typography } from "antd";
+import { App, Button, Card, Input, InputNumber, Modal, Select, Space, Tag, Typography } from "antd";
 import { api, fmtDur } from "./api";
 import "./editor.css";
 
@@ -7,6 +7,7 @@ type Shot = { idx: number; frames?: string[] };
 type Media = { name: string; kind?: string; thumbnails?: string[]; shots?: Shot[] };
 type Row = { seq: number; media: string; kind?: string; source?: string; thumbnail?: string;
   start_offset?: number; use_duration: number; segment_text?: string; role?: string;
+  note?: string; html_pages?: { path: string; duration: number; brief?: string }[];
   shot_idx?: number | null; alternatives?: { media: string; shot_idx: number; reason: string }[] };
 type Plan = { revision?: number; doc_path?: string;
   storyboard?: { cards?: { seq: number; frame: string }[] };
@@ -36,6 +37,12 @@ export function PlanEditor({ runId, publishedRevision, focusRow, onChanged }: {
   const [dragged, setDragged] = useState<number>();
   const [dropTarget, setDropTarget] = useState<number>();
   const [append, setAppend] = useState<string>();
+  const [motionAfter, setMotionAfter] = useState<number>();
+  const [motionPrompt, setMotionPrompt] = useState("");
+  const [motionDuration, setMotionDuration] = useState(1.5);
+  const [motionResolution, setMotionResolution] = useState<"1080p" | "4k">("4k");
+  const [motionMusicMode, setMotionMusicMode] = useState<"auto" | "continuous" | "transition" | "none">("auto");
+  const [motionBpm, setMotionBpm] = useState<number>();
   const { message } = App.useApp();
   const load = useCallback(async () => {
     const response = await fetch(`/api/runs/${runId}/plan`);
@@ -78,10 +85,34 @@ export function PlanEditor({ runId, publishedRevision, focusRow, onChanged }: {
     } finally { setBusy(false); }
   };
 
+  const generateMotion = async () => {
+    if (!plan || motionAfter == null || busy) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/runs/${runId}/html-motion`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected_revision: plan.revision ?? 0, after: motionAfter,
+          prompt: motionPrompt, duration: motionDuration, resolution: motionResolution,
+          music_mode: motionMusicMode, bpm: motionBpm ?? null }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail ?? "生成失败");
+      setPlan(result); setMotionAfter(undefined); setMotionPrompt("");
+      onChanged(); message.success("HTML 动画已生成并插入时间线");
+    } catch (error) {
+      message.error(String(error)); await load();
+    } finally { setBusy(false); }
+  };
+
   if (!plan) return null;
   const options = plan.media.flatMap((m) => m.shots?.length
     ? m.shots.map((s) => ({ label: `${m.name} #${s.idx}`, value: JSON.stringify({ media: m.name, shot: s.idx }) }))
     : [{ label: m.name, value: JSON.stringify({ media: m.name }) }]);
+  const transitionOptions = plan.timeline.slice(0, -1).flatMap((row, index) => {
+    const next = plan.timeline[index + 1];
+    return row.kind === "video" && next.kind === "video"
+      ? [{ value: row.seq, label: `#${row.seq} ${row.media} → #${next.seq} ${next.media}` }] : [];
+  });
   const imageUrl = (path?: string) => path ? `${api.fileUrl(path, runId)}&revision=${plan.revision ?? 0}` : undefined;
 
   return <Card title="调整计划" size="small" id="plan-editor">
@@ -102,9 +133,11 @@ export function PlanEditor({ runId, publishedRevision, focusRow, onChanged }: {
           <div className="plan-editor__current-text">
             <Space size={6} wrap><Typography.Text strong>#{row.seq} · {row.media || "待补素材"}</Typography.Text>
               {row.role && <Tag>{row.role}</Tag>}
+              {row.source === "generated" && <Tag color="purple">动态 HTML · {row.html_pages?.length ?? 1} 个画面</Tag>}
               <Typography.Text type="secondary">{fmtDur(row.use_duration)}{row.kind === "video" ? ` · 入点 ${(row.start_offset ?? 0).toFixed(2)}s` : ""}</Typography.Text>
             </Space>
             <Typography.Paragraph style={{ margin: "6px 0" }}>{row.segment_text || "无旁白画面"}</Typography.Paragraph>
+            {row.source === "generated" && row.note && <Typography.Paragraph type="secondary" style={{ margin: "0 0 6px" }}>{row.note}</Typography.Paragraph>}
             <span className="plan-editor__drag-handle" draggable={!busy}
               onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; setDragged(row.seq); }}
               onDragEnd={() => { setDragged(undefined); setDropTarget(undefined); }}
@@ -150,6 +183,27 @@ export function PlanEditor({ runId, publishedRevision, focusRow, onChanged }: {
       <Select placeholder="选择追加镜头" options={options} style={{ width: 280 }} value={append} onChange={setAppend} />
       <Button disabled={busy || !append} onClick={() => append && void edit({ op: "append", ...JSON.parse(append) })}>追加</Button>
       <Button disabled={busy} onClick={() => void load()}>刷新计划</Button>
+      <Select aria-label="选择两段视频之间的过场位置" placeholder="选择前后两段视频"
+        style={{ width: 360 }} options={transitionOptions} disabled={busy || !transitionOptions.length}
+        onChange={setMotionAfter} />
     </Space>
+    <Modal title="在所选两段视频之间生成 HTML 过场" open={motionAfter != null}
+      okText="生成并插入" cancelText="取消" confirmLoading={busy}
+      onOk={() => void generateMotion()} onCancel={() => !busy && setMotionAfter(undefined)}>
+      <Typography.Paragraph type="secondary">AI 会先阅读整篇文案、前后两段旁白与素材名称，判断需要几个连续画面；随后为每个画面编写独立、可运动的 HTML/CSS/JS 页面，并合成为一段视频。</Typography.Paragraph>
+      <Input.TextArea rows={4} value={motionPrompt} onChange={(event) => setMotionPrompt(event.target.value)}
+        placeholder="例如：用蓝色线条把前一镜头的城市轮廓变形成数据流，并浮现关键数字" maxLength={4000} showCount />
+      <div style={{ marginTop: 12 }}>时长：<InputNumber min={0.2} max={30} step={0.1} value={motionDuration}
+        onChange={(value) => setMotionDuration(value ?? 1.5)} addonAfter="秒" /></div>
+      <div style={{ marginTop: 12 }}>输出清晰度：<Select value={motionResolution} style={{ width: 180 }}
+        options={[{ value: "4k", label: "4K 超高清（3840×2160）" }, { value: "1080p", label: "1080p（1920×1080）" }]}
+        onChange={setMotionResolution} /></div>
+      <div style={{ marginTop: 12 }}>音乐关系：<Select value={motionMusicMode} style={{ width: 260 }}
+        options={[{ value: "auto", label: "让 AI 判断" }, { value: "continuous", label: "沿用前后同一首音乐" },
+          { value: "transition", label: "使用单独的过场音乐" }, { value: "none", label: "无音乐" }]}
+        onChange={setMotionMusicMode} /></div>
+      {motionMusicMode !== "none" && <div style={{ marginTop: 12 }}>BPM（可选）：<InputNumber min={30} max={300}
+        value={motionBpm} placeholder="AI 判断" onChange={(value) => setMotionBpm(value ?? undefined)} /></div>}
+    </Modal>
   </Card>;
 }

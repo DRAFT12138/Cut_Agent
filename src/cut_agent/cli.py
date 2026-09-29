@@ -166,6 +166,15 @@ def cmd_agent_context(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # argparse writes localized help before command dispatch.  Redirected
+    # streams on Windows CI can default to cp1252, which cannot encode it.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except (OSError, ValueError):
+                pass
     ap = argparse.ArgumentParser(description="Cut Agent 粗剪流水线")
     sub = ap.add_subparsers(dest="cmd", required=True)
 

@@ -36,6 +36,17 @@ class ReviewCheck(BaseModel):
     text: str
     checked: StrictBool
 
+
+class HtmlMotionRequest(BaseModel):
+    expected_revision: StrictInt
+    after: StrictInt
+    prompt: str = ""
+    duration: float = Field(default=1.5, gt=0, le=30)
+    resolution: Literal["1080p", "4k"] = "4k"
+    music_mode: Literal["auto", "continuous", "transition", "none"] = "auto"
+    bpm: float | None = Field(default=None, ge=30, le=300)
+    preview: bool = False
+
 WEB_DIST = Path(__file__).resolve().parent / "web_dist"
 
 
@@ -213,6 +224,17 @@ def make_app() -> FastAPI:
         try:
             revision = body.pop("expected_revision", None)
             return rebuild(run_id, body, expected_revision=revision)
+        except RunError as exc:
+            raise HTTPException(409, str(exc))
+
+    @app.post("/api/runs/{run_id}/html-motion")
+    def html_motion(run_id: str, body: HtmlMotionRequest):
+        from .editing import add_html_motion
+        try:
+            return add_html_motion(run_id, after=body.after, prompt=body.prompt,
+                                   duration=body.duration, resolution=body.resolution,
+                                   expected_revision=body.expected_revision,
+                                   preview=body.preview, music_mode=body.music_mode, bpm=body.bpm)
         except RunError as exc:
             raise HTTPException(409, str(exc))
 

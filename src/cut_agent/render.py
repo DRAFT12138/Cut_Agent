@@ -59,7 +59,8 @@ def _duration_of(p: Path) -> float:
         return 0.0
 
 
-def _check_video(p: Path, frames: int, fps: float, context: str) -> None:
+def _check_video(p: Path, frames: int, fps: float, context: str, *,
+                 width: int = TARGET_W, height: int = TARGET_H) -> None:
     """Decode and verify preview geometry/timing before checkpointing or publishing."""
     try:
         result = subprocess.run(
@@ -79,7 +80,7 @@ def _check_video(p: Path, frames: int, fps: float, context: str) -> None:
         if (not math.isclose(rate, fps, rel_tol=1e-6)
                 or not math.isclose(duration, frames / fps, abs_tol=.001, rel_tol=0)
                 or not math.isclose(start, 0, abs_tol=.001)
-                or (stream["width"], stream["height"]) != (TARGET_W, TARGET_H)):
+                or (stream["width"], stream["height"]) != (width, height)):
             raise ValueError("编码画幅、帧率或时长与执行卡不一致")
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError, TypeError,
             ZeroDivisionError) as exc:
@@ -112,6 +113,7 @@ def _still_input(src: Path, out_path: Path) -> Path:
 
 def normalize_segment(src: Path, kind: str, start_offset: float, use_duration: float,
                       out_path: Path, *, fps: float = FPS, label: str | None = None,
+                      width: int = TARGET_W, height: int = TARGET_H,
                       source_frames: list[int] | None = None,
                       source_timing: dict | None = None,
                       legacy_full_decode: bool = False) -> None:
@@ -119,7 +121,8 @@ def normalize_segment(src: Path, kind: str, start_offset: float, use_duration: f
     out_path.parent.mkdir(parents=True, exist_ok=True)
     frames = frame_index(use_duration, fps)
     base = [_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y"]
-    vf = _NORM_VF.replace(f"fps={FPS}", f"fps={fps}")
+    vf = (video_fit_filter(width, height) + ","
+          f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps={fps}")
     if label is not None:
         label_file = out_path.with_suffix(".label.txt")
         label_file.write_text(label, encoding="utf-8")
@@ -234,6 +237,11 @@ def render_video(timeline: list[dict], media_folder: Path,
     if not math.isfinite(fps) or fps <= 0:
         raise RenderError("预览 fps 必须为正数")
     timeline = align_timeline(timeline, list(media_index.values()))
+    html_sizes = [(int(row.get("width", 0)), int(row.get("height", 0))) for row in timeline
+                  if row.get("source") == "generated" and row.get("kind") == "html"]
+    target_w, target_h = max(html_sizes, key=lambda size: size[0] * size[1]) if html_sizes else (TARGET_W, TARGET_H)
+    if (target_w, target_h) not in ((1920, 1080), (3840, 2160), (TARGET_W, TARGET_H)):
+        raise RenderError("HTML 动画分辨率无效")
     workdir = out_path.parent / "preview_work"
     workdir.mkdir(parents=True, exist_ok=True)
     paths, skipped, markers = [], [], []
@@ -253,7 +261,10 @@ def render_video(timeline: list[dict], media_folder: Path,
         if not math.isfinite(offset) or offset < 0:
             raise RenderError(f"第 {i} 行入点必须为非负数")
         is_web = row.get("source") == "web"
-        src = (Path(row["local_path"]) if is_web and row.get("asset_status") == "verified" and row.get("local_path")
+        is_html = row.get("source") == "generated" and row.get("kind") == "html"
+        html_pages = row.get("html_pages") or ([{"path": row.get("local_path"), "duration": duration}] if is_html else [])
+        src = (Path(row["local_path"]) if is_html and row.get("local_path")
+               else Path(row["local_path"]) if is_web and row.get("asset_status") == "verified" and row.get("local_path")
                else media_folder / name)
         kind = row.get("kind", "video")
         missing = not src.is_file() or (is_web and row.get("asset_status") != "verified")
@@ -272,9 +283,15 @@ def render_video(timeline: list[dict], media_folder: Path,
                     raise RenderError(f"第 {i} 行入/出点超过可解码源帧范围")
                 source_frames = [index.nearest(offset, allow_end=False), index.nearest(offset + duration)]
         label = f"#{i} {marker_start:.2f}-{marker_end:.2f}s {name}" + (" [MISSING]" if missing else "")
+        page_fingerprints = ([{"path": str(Path(page["path"]).resolve()),
+                               "fingerprint": fingerprint(Path(page["path"])), "duration": page["duration"]}
+                              for page in html_pages] if is_html else None)
         key = {"source": str(src.resolve()), "fingerprint": fingerprint(src), "kind": kind,
                "offset": offset, "duration": encoded_duration, "label": label, "fps": fps,
-               "version": 5 if kind == "image" else 6}
+               "width": target_w, "height": target_h,
+               "version": 1 if is_html else 5 if kind == "image" else 6}
+        if page_fingerprints is not None:
+            key["html_pages"] = page_fingerprints
         if source_frames is not None:
             key["source_frames"] = source_frames
         segment = workdir / f"seg_{i:03d}.mp4"
@@ -283,23 +300,30 @@ def render_video(timeline: list[dict], media_folder: Path,
         reusable = read_json(checkpoint) == key and segment.is_file()
         if reusable:
             try:
-                _check_video(segment, expected_frames, fps, f"第 {i} 段缓存")
+                _check_video(segment, expected_frames, fps, f"第 {i} 段缓存", width=target_w, height=target_h)
             except RenderError:
                 reusable = False
         if not reusable:
             temporary = segment.with_suffix(".partial.mp4")
-            normalize_segment(src, kind, offset, encoded_duration, temporary, fps=fps, label=label,
-                              source_frames=source_frames,
-                              source_timing=metadata.get("source_timing") if kind == "video" else None)
+            if is_html:
+                from .html_motion import render_pages
+                render_pages(html_pages, temporary, encoded_duration, fps, width=target_w, height=target_h)
+            else:
+                normalize_segment(src, kind, offset, encoded_duration, temporary, fps=fps, label=label,
+                                  width=target_w, height=target_h,
+                                  source_frames=source_frames,
+                                  source_timing=metadata.get("source_timing") if kind == "video" else None)
             try:
-                _check_video(temporary, expected_frames, fps, f"第 {i} 段（{name}）")
+                _check_video(temporary, expected_frames, fps, f"第 {i} 段（{name}）",
+                             width=target_w, height=target_h)
             except RenderError:
                 if kind != "video" or source_frames is not None:
                     raise
                 temporary.unlink(missing_ok=True)
                 normalize_segment(src, kind, offset, encoded_duration, temporary, fps=fps, label=label,
-                                  legacy_full_decode=True)
-                _check_video(temporary, expected_frames, fps, f"第 {i} 段（{name}）")
+                                  width=target_w, height=target_h, legacy_full_decode=True)
+                _check_video(temporary, expected_frames, fps, f"第 {i} 段（{name}）",
+                             width=target_w, height=target_h)
             temporary.replace(segment)
             write_json_atomic(checkpoint, key)
         paths.append(segment)
@@ -321,9 +345,10 @@ def render_video(timeline: list[dict], media_folder: Path,
     has_music = music_path is not None and _mux_bgm(silent, music_path, final, duration, volume)
     if not has_music:
         silent.replace(final)
-    _check_video(final, total_frames, fps, "最终预览")
+    _check_video(final, total_frames, fps, "最终预览", width=target_w, height=target_h)
     final.replace(out_path)
     return {"n_segments": len(paths), "skipped": skipped, "has_music": has_music,
             "duration": round(duration, 3), "size_mb": round(out_path.stat().st_size / 1024 / 1024, 2),
             "markers": markers, "fps": fps, "frame_count": total_frames,
-            "bgm_volume": volume, "path": str(out_path.resolve())}
+            "bgm_volume": volume, "width": target_w, "height": target_h,
+            "path": str(out_path.resolve())}
