@@ -15,8 +15,8 @@ Use Cut Agent's file-based agent interface. Do not invent media names or claim t
    uv run cut-agent agent-context --media /absolute/media/path --copy script.txt --output agent-context.json
    ```
 
-2. Read `agent-context.json`. Inspect representative images listed in every media item's `thumbnails`. Use the available image-viewing tool; filenames and metadata alone are insufficient for visual matching.
-3. Write `agent-decisions.json` following [references/decisions.md](references/decisions.md). Preserve narration text exactly, use exact media filenames, avoid unnecessary repeated shots, and keep video ranges within source duration.
+2. Read `agent-context.json`. Inspect every image listed in `thumbnail_samples`; use each sample's `time` when choosing a video offset. Use the available image-viewing tool—filenames and metadata alone are insufficient for visual matching.
+3. Write `agent-decisions.json` following [references/decisions.md](references/decisions.md). Preserve and completely cover the narration, reference `segment_id` and `media_id`, avoid unnecessary repeated shots, and keep video ranges within source duration.
 4. Run without a model endpoint:
 
    ```bash

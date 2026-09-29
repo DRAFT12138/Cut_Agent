@@ -36,10 +36,11 @@ def cmd_run(args) -> int:
     agent_decisions = None
     if args.agent_decisions:
         from .agent_tools import load_decisions
-        from .media import IMAGE_EXT, VIDEO_EXT
-        media_names = {path.relative_to(media_folder).as_posix() for path in media_folder.rglob("*")
-                       if path.is_file() and path.suffix.lower() in VIDEO_EXT | IMAGE_EXT}
-        agent_decisions = load_decisions(args.agent_decisions, media_names)
+        from .config import WORK_DIR
+        from .media import probe_media
+        media = [{key: value for key, value in vars(item).items() if key != "path"}
+                 for item in probe_media(media_folder, cache_dir=WORK_DIR / "media_cache")]
+        agent_decisions = load_decisions(args.agent_decisions, media, copy)
     runs.recover_interrupted()
     handle, _ = runs.start_run(str(media_folder), copy, seed=args.seed,
                                options={"preview": args.preview, "platform": args.platform,
