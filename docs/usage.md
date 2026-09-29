@@ -69,7 +69,13 @@ uv run cut-agent rebuild --run RUN_ID --preview
 
 `edit` line numbers are 1-based. Other operations are `--drop ROW`, `--swap ROW MEDIA` (optional `--shot N`), and `--append MEDIA` (optional `--shot N`). `rebuild` uses the saved `plan.json` without regenerating the complete pipeline. A fixed seed controls the request value, but model and external service changes can still change results.
 
-## 5. Outputs and handoff
+## 5. Observability and recovery
+
+Each run's `run.json` records its current attempt, recovery count, active stage, latest committed checkpoint, and bounded recovery history. `log.jsonl` is a durable structured event stream with the run ID, process ID, monotonic sequence, and timestamp. A `checkpoint` event is appended after every stage artifact is atomically committed, so observers can distinguish in-flight work from reusable progress. Run `cut-agent status <run-id>` to see the summary.
+
+After an unexpected process exit, `status`, `list`, or server startup detects runs that no longer own a worker, marks them `interrupted`, and identifies `resumable_from`. Run `cut-agent resume <run-id>` to validate the media snapshot, reuse every contiguous completed stage, increment the attempt, and record the resume point and reused stages in both the event stream and `recovery_history`. Recovery is rejected if source media changed, preventing stale checkpoints from being applied to new input.
+
+## 6. Outputs and handoff
 
 Each task writes to `output/runs/RUN_ID/`. Key files include:
 

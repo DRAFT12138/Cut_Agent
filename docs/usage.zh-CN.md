@@ -75,7 +75,13 @@ uv run cut-agent rebuild --run RUN_ID --preview
 
 `edit` 行号从 1 开始。还可用 `--drop ROW`、`--swap ROW MEDIA`（可附 `--shot N`）、`--append MEDIA`（可附 `--shot N`）。`rebuild` 依据已有 `plan.json` 重建导出，不重跑完整流水线。固定 seed 只固定请求参数；模型和外部服务变化仍可能改变结果。
 
-## 5. 产物与交接
+## 5. 可观测与恢复
+
+每个任务的 `run.json` 会记录当前执行尝试、恢复次数、当前阶段、最近成功断点和恢复历史；`log.jsonl` 是带 `run_id`、PID、递增序号和时间戳的持久事件流。阶段产物完成原子提交后会追加 `checkpoint` 事件，因此可以区分“仍在处理”和“断点已经可复用”。使用 `cut-agent status <run-id>` 可查看这份摘要。
+
+进程异常退出后，`status`、`list` 或服务启动会检测失去执行器所有权的任务，将其标为 `interrupted` 并定位 `resumable_from`。随后运行 `cut-agent resume <run-id>`；系统会校验素材快照、复用所有连续完成的阶段断点、增加 attempt，并把恢复点与复用阶段写入事件流和 `recovery_history`。若源素材已变化，恢复会拒绝执行，避免把旧断点套到新输入上。
+
+## 6. 产物与交接
 
 每个任务写入 `output/runs/RUN_ID/`，主要文件如下：
 

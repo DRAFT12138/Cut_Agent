@@ -1,6 +1,6 @@
 # Cut Agent
 
-[English](README.md) · [中文使用说明](docs/usage.zh-CN.md) · [下一步工作](docs/TODO.zh-CN.md) · [English user guide](docs/usage.md)
+[English](README.md) · [中文使用说明](docs/usage.zh-CN.md) · [功能规划](feature.json) · [English user guide](docs/usage.md)
 
 Cut Agent 把**视频或图片素材文件夹 + 文案**整理成可编辑的粗剪方案。你可以在本地 Web 工作台核对镜头、调整时间线、比较 A/B 版本、按需生成带段号的预览，并导出给精剪人员使用的交接包。
 
@@ -51,6 +51,7 @@ uv run cut-agent run --media sample_media --copy sample_copy.txt \
 ```
 
 完整代理流程与 JSON 契约见 [`cut-agent-rough-cut` Skill](skills/cut-agent-rough-cut/SKILL.md)。
+新版契约允许代理按节奏为同一旁白段安排多个镜头，同时要求提交可审阅的决策轨迹；运行会把原始提案和轨迹保存到 `output/runs/<run-id>/agent/`，并把轨迹同步写入事件流，便于实时观察和事后复盘。
 可将该目录复制到 Codex 的 `${CODEX_HOME:-~/.codex}/skills/`，或交给其他支持 `SKILL.md` 的编码代理加载；即使不安装 Skill，也能直接使用上述 CLI 文件协议。
 
 ## 模型与可选服务

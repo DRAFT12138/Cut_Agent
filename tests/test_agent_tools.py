@@ -12,12 +12,13 @@ MEDIA = [{"name": "clip.mp4", "kind": "video", "duration": 5, "thumbnails": ["ab
 
 def decisions():
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "segments": [{"segment_id": "segment_001", "text": "第一段", "duration": 3, "mood": "轻快"}],
         "media_descriptions": {media_id("clip.mp4"): "城市街道"},
         "timeline": [{"segment_id": "segment_001", "media_id": media_id("clip.mp4"),
                       "use_duration": 3, "start_offset": 1}],
         "music": {"mood": "轻快", "primary": {"title": "Agent choice"}, "alternatives": []},
+        "trajectory": [{"action": "coverage_check", "decision": "采用当前时间线"}],
     }
 
 
@@ -41,7 +42,6 @@ def test_load_decisions_normalizes_ids_and_validates_contract(tmp_path):
         (lambda data: data["timeline"][0].update(media_id="media_missing"), "不存在的素材"),
         (lambda data: data["timeline"][0].update(start_offset=4), "超出"),
         (lambda data: data["segments"][0].update(text="改写"), "完整覆盖"),
-        (lambda data: data["timeline"].append(dict(data["timeline"][0])), "恰好覆盖"),
         (lambda data: data["timeline"][0].update(media_id="", needs_web=False), "needs_web"),
     ],
 )
@@ -80,8 +80,48 @@ def test_build_context_exposes_stable_ids_and_timed_observations(tmp_path, monke
     monkeypatch.setattr(graph, "scan_media", lambda state: {"media": MEDIA, "log": []})
     context = build_context(str(tmp_path), "旁白")
     item = context["media"][0]
-    assert context["schema_version"] == 2
+    assert context["schema_version"] == 3
     assert item["media_id"] == media_id("clip.mp4")
     assert item["thumbnail_samples"] == [
         {"path": "abc_t1.jpg", "time": 1.25}, {"path": "abc_t3.jpg", "time": 3.75}]
     assert item["max_use_duration"] == 5
+
+
+def test_v3_allows_purposeful_multi_shot_segments_and_keeps_trajectory(tmp_path):
+    data = decisions()
+    data["timeline"] = [
+        {"segment_id": "segment_001", "media_id": media_id("clip.mp4"),
+         "use_duration": 1.5, "start_offset": 0},
+        {"segment_id": "segment_001", "media_id": media_id("clip.mp4"),
+         "use_duration": 1.5, "start_offset": 2},
+    ]
+    data["strategy"] = {"pacing": "two-shot montage"}
+    data["trajectory"] = [
+        {"action": "inspect_frames", "observation": "Two distinct moments",
+         "decision": "Use both to create motion"},
+        {"action": "coverage_check", "decision": "All narration is covered"},
+    ]
+
+    loaded = load_decisions(write_decisions(tmp_path, data), MEDIA, "第一段")
+
+    assert len(loaded["timeline"]) == 2
+    assert loaded["trajectory"][0]["step"] == 1
+    assert loaded["strategy"]["pacing"] == "two-shot montage"
+
+
+def test_v3_requires_a_reviewable_trajectory(tmp_path):
+    data = decisions()
+    del data["trajectory"]
+    with pytest.raises(RunError, match="trajectory"):
+        load_decisions(write_decisions(tmp_path, data), MEDIA, "第一段")
+
+
+@pytest.mark.parametrize("version", [None, 1, 2, 4])
+def test_only_current_schema_is_accepted(tmp_path, version):
+    data = decisions()
+    if version is None:
+        del data["schema_version"]
+    else:
+        data["schema_version"] = version
+    with pytest.raises(RunError, match="schema_version 必须为 3"):
+        load_decisions(write_decisions(tmp_path, data), MEDIA, "第一段")

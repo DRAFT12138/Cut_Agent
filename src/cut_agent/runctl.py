@@ -214,11 +214,12 @@ class EventLog:
         self._seq = max((r["seq"] for r in _event_records(self._path)), default=0)
 
     def event(self, stage: str, type_: str, **kw) -> None:
-        """追加一条事件。type: status | progress | log。"""
+        """Durably append one structured event for live tailing and replay."""
         with self._lock:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._seq += 1
             rec = {"seq": self._seq, "ts": round(time.time(), 3),
+                   "run_id": self.run_id, "pid": os.getpid(),
                    "stage": stage, "type": type_, **kw}
             with self._path.open("a+b") as f:
                 if f.tell():
@@ -226,6 +227,8 @@ class EventLog:
                     if f.read(1) != b"\n":
                         f.write(b"\n")  # separate an interrupted record from the next event
                 f.write((json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
             if type_ == "progress":
                 self.progress[stage] = dict(kw)
                 if self.on_progress:

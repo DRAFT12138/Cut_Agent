@@ -56,6 +56,12 @@ def test_full_run_sync(tmp_runs, fake_llm, no_music_download):
     assert log.latest > 0
     evs = log.tail(0)
     assert any(e["type"] == "status" for e in evs)
+    assert all(e["run_id"] == rid and isinstance(e["pid"], int) for e in evs)
+    assert sum(e["type"] == "checkpoint" for e in evs) == len(runs.STAGE_NAMES)
+    obs = meta["observability"]
+    assert obs["attempt"] == 1
+    assert obs["last_checkpoint"] == runs.STAGE_NAMES[-1]
+    assert obs["latest_event_seq"] == log.latest
 
 
 def test_full_run_background_resume_done(tmp_runs, fake_llm, no_music_download):
@@ -117,6 +123,10 @@ def test_pause_then_resume(tmp_runs, fake_llm, no_music_download, monkeypatch):
     assert st2 == "done"
     meta = runs.status_of(h.run_id)
     assert meta["status"] == "done"
+    assert meta["observability"]["attempt"] == 2
+    assert meta["recovery_history"][-1]["kind"] == "resumed"
+    assert any(e["type"] == "recovery" and e["what"] == "run-resumed"
+               for e in runctl.EventLog(h.run_id).tail(0))
     for name in runs.STAGE_NAMES:
         assert _stage_file(h.run_id, name).exists()
 
@@ -174,6 +184,7 @@ def test_power_loss_recover_resume(tmp_runs, fake_llm, no_music_download, monkey
     assert rid in n
     meta = runs.status_of(rid)
     assert meta["status"] == "interrupted"
+    assert meta["observability"]["recovery_count"] == 1
     # 断点 = 第一个未完成阶段
     assert meta.get("resumable_from") == "understand_media"
     # 恢复：应复用已有产物（scan_media 不重跑）
@@ -182,6 +193,9 @@ def test_power_loss_recover_resume(tmp_runs, fake_llm, no_music_download, monkey
     st = wait_done(h, timeout=120)
     assert st == "done"
     assert runs.status_of(rid)["status"] == "done"
+    final = runs.status_of(rid)
+    assert final["observability"]["attempt"] == 2
+    assert final["observability"]["recovery_count"] == 1
     for name in runs.STAGE_NAMES:
         assert _stage_file(rid, name).exists()
     # 已完成的阶段不应再次触发 LLM（plan 只调 1 次）
