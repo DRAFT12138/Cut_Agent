@@ -19,9 +19,6 @@ from cut_agent.llm import LLMError
 from cut_agent.server import make_app
 
 
-CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-
-
 def main() -> None:
     root = Path("work/verification") / (time.strftime("%Y%m%dT%H%M%S") + "-" + uuid4().hex[:4])
     root.mkdir(parents=True)
@@ -65,7 +62,7 @@ def main() -> None:
             assert server.started
 
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=True, executable_path=CHROME,
+                browser = playwright.chromium.launch(headless=True,
                                                      args=["--disable-gpu", "--no-sandbox"])
                 errors: list[str] = []
                 findings = {}

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from pathlib import Path
 
@@ -21,6 +22,23 @@ COPY = (
     "午后，人群在广场上散去，有人跑步，有人发呆。"
     "夜幕落下，霓虹一盏盏亮起，这座城市从不真正睡着。"
 )
+
+MEDIA_TEST_MODULES = {
+    "test_display_geometry.py", "test_document_delivery.py", "test_frame_alignment.py",
+    "test_geometry_cache.py", "test_image_orientation.py", "test_preview.py",
+    "test_source_binding.py", "test_source_timing.py", "test_webfetch.py",
+}
+
+
+def pytest_collection_modifyitems(items):
+    """Label codec integration tests and explain missing system prerequisites."""
+    media_ready = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+    missing = pytest.mark.skip(reason="media tests require both ffmpeg and ffprobe on PATH")
+    for item in items:
+        if item.path.name in MEDIA_TEST_MODULES:
+            item.add_marker(pytest.mark.media)
+            if not media_ready:
+                item.add_marker(missing)
 
 
 def _plan_json() -> dict:

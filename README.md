@@ -15,20 +15,17 @@ Cut Agent turns a folder of video or image clips and a script into an **editable
 - Searches for supplemental footage and music when their sources are available; records gaps for manual review when they are not.
 - Supports timeline edits, A/B variants, pause/resume, and checkpoint recovery in a local web workspace.
 - Exports a finishing guide and an offline-readable handoff ZIP. Source footage and downloaded media must be supplied separately to the editor.
+- Lets Codex, Claude Code, and other coding agents inspect media context and author rough-cut decisions without a separate model API.
 
 ## Quick start
 
-**Requirements:** Python 3.10–3.14, [uv](https://docs.astral.sh/uv/), FFmpeg **and** FFprobe on `PATH`, and Node.js with Corepack for the web UI. An OpenAI-compatible chat endpoint is recommended; without one, planning uses rule-based fallbacks and records degraded stages. Chrome and the optional search daemon improve web asset discovery.
+**Requirements:** Linux or Windows, Python 3.10–3.14, and FFmpeg **and** FFprobe 5+ on `PATH`. Released wheels include the web UI, so Node.js is needed only for frontend development. An OpenAI-compatible chat endpoint is recommended; without one, planning uses rule-based fallbacks and records degraded stages. Chrome and the optional search daemon improve web asset discovery.
 
 ```bash
 git clone https://github.com/DRAFT12138/Cut_Agent.git
 cd Cut_Agent
 uv sync
 uv run python make_sample.py
-cd web
-corepack pnpm install --frozen-lockfile
-corepack pnpm build
-cd ..
 uv run cut-agent serve --port 8090
 ```
 
@@ -39,7 +36,20 @@ uv run cut-agent run --media sample_media --copy sample_copy.txt --seed 7
 uv run cut-agent list
 ```
 
-On Windows, use `cd ..` or `Set-Location ..` after building the UI. If you use another Python environment, `python -m pip install -e .` and `python -m cut_agent.cli ...` provide the same CLI. The repository does not ship a model, FFmpeg, generated media, or a prebuilt UI.
+If you use another Python environment, `python -m pip install .` and `python -m cut_agent.cli ...` provide the same CLI. The Python package includes a prebuilt UI, but does not ship a model, FFmpeg, or generated media. Frontend contributors can refresh that embedded UI with `uv run python tools/build_web_assets.py`.
+
+### Use a coding agent instead of a model API
+
+Export deterministic context, ask the agent to inspect the listed thumbnails and write `agent-decisions.json`, then run the normal pipeline with those decisions:
+
+```bash
+uv run cut-agent agent-context --media sample_media --copy sample_copy.txt --output agent-context.json
+uv run cut-agent run --media sample_media --copy sample_copy.txt \
+  --agent-decisions agent-decisions.json --no-finishing-llm --preview
+```
+
+See the repository's [`cut-agent-rough-cut` skill](skills/cut-agent-rough-cut/SKILL.md) for the workflow and decision contract.
+Copy that directory into `${CODEX_HOME:-~/.codex}/skills/` for Codex, or load it with another coding agent that supports `SKILL.md`. The CLI file protocol also works without installing the skill.
 
 ## Model and optional services
 
@@ -59,10 +69,17 @@ For best shot descriptions, the model endpoint must accept image inputs. Search 
 ## Development
 
 ```bash
-uv run pytest -q
+uv run pytest -q -m 'not media'
+uv run pytest -q -m media
+uv run ruff check src tests
 cd web
 corepack pnpm test
 corepack pnpm build
+cd ..
+uv run python tools/verify_ui.py smoke
+uv build && uv run python tools/check_release.py
 ```
+
+See the [release checklist](docs/RELEASING.md) for isolated Linux/Windows installation checks and publishing steps.
 
 Contributions are welcome through issues and pull requests. Please include steps to reproduce bugs and run the relevant checks. The Python app is licensed under [MIT](LICENSE). The bundled `tools/open-webSearch` source is a separate [Apache-2.0 project](tools/open-webSearch/LICENSE); see [third-party notices](THIRD_PARTY_NOTICES.md).

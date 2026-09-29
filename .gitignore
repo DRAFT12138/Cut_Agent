@@ -17,6 +17,10 @@ secrets.json
 # Web 前端（Phase 0）：源码入库，构建产物与依赖不入库
 web/node_modules/
 web/dist/
+# The release UI is deliberately checked in as Python package data. Its source
+# remains web/; refresh it with tools/build_web_assets.py.
+!src/cut_agent/web_dist/
+!src/cut_agent/web_dist/**
 web/*.tsbuildinfo
 web/.test-build/
 

@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import exports, runs, runctl
+from . import __version__, exports, runs, runctl
 from .config import WORK_DIR
 from .runctl import RunError
 from pydantic import BaseModel, Field, StrictBool, StrictInt
@@ -36,11 +36,11 @@ class ReviewCheck(BaseModel):
     text: str
     checked: StrictBool
 
-WEB_DIST = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
+WEB_DIST = Path(__file__).resolve().parent / "web_dist"
 
 
 def make_app() -> FastAPI:
-    app = FastAPI(title="Cut Agent", version="0.2.0")
+    app = FastAPI(title="Cut Agent", version=__version__)
 
     # ---------- 基础 ----------
 
@@ -285,7 +285,7 @@ def _input_of(run_id: str) -> dict:
 
 
 def mount_dist(app: FastAPI) -> None:
-    """若前端已构建（web/dist），挂静态资源 + SPA 回退；否则占位页。"""
+    """Mount the frontend embedded in the installed Python package."""
     if WEB_DIST.is_dir():
         assets = WEB_DIST / "assets"
         if assets.is_dir():
@@ -306,6 +306,5 @@ def mount_dist(app: FastAPI) -> None:
         @app.get("/")
         def placeholder():
             return PlainTextResponse(
-                "Cut Agent API 运行中。前端未构建：\n"
-                "  cd web && pnpm install && pnpm build\n"
+                "Cut Agent API 运行中。安装包缺少前端资源，请重新安装正式发行物。\n"
                 "API 文档: /docs\n")

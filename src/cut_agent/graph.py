@@ -72,6 +72,13 @@ def _seed_of(state: CutState) -> int | None:
     return ctx.seed if ctx is not None else None
 
 
+def _agent_decision(state: CutState, key: str):
+    """Return a precomputed coding-agent decision, if this run supplied one."""
+    ctx = _ctx(state)
+    decisions = ctx.options.get("agent_decisions", {}) if ctx is not None else {}
+    return decisions.get(key) if isinstance(decisions, dict) else None
+
+
 def _checkpoint(state: CutState, stage: str) -> None:
     """单位边界检查点：暂停/取消生效。无控制（CLI 直调）时 no-op。"""
     ctx = _ctx(state)
@@ -143,6 +150,13 @@ def understand_media(state: CutState) -> dict:
     - 视觉层整体关闭（CUT_AGENT_VISION=0）时直接跳过。
     """
     media = state.get("media", [])
+    descriptions = _agent_decision(state, "media_descriptions")
+    if isinstance(descriptions, dict):
+        media = [{**row, "description": descriptions.get(row.get("name"), row.get("description", ""))}
+                 for row in media]
+    if _agent_decision(state, "segments") is not None:
+        return {"media": media,
+                "log": state.get("log", []) + ["编码代理已提供素材描述，跳过视觉模型 API"]}
     if not VISION_ENABLED:
         return {"media": media, "log": state.get("log", []) + ["视觉层已关闭（CUT_AGENT_VISION=0），跳过"]}
     media_folder = Path(state["media_folder"])
@@ -231,12 +245,15 @@ def plan_segments(state: CutState) -> dict:
     est = _copy_duration_hint(copy)
     user = f"预计朗读时长约 {est:.0f} 秒。文案如下：\n\n{copy}"
     _checkpoint(state, "plan_segments")
-    _emit(state, "plan_segments", "progress", done=0, total=1, item="LLM 切段")
-    try:
-        data = chat_json(PLAN_SYSTEM, user, max_tokens=4000, seed=_seed_of(state))
-    except LLMError as e:
-        data = None
-        state.get("log", []).append(f"plan_segments LLM 失败，用规则切段降级: {e}")
+    data = _agent_decision(state, "segments")
+    _emit(state, "plan_segments", "progress", done=0, total=1,
+          item="编码代理分段" if data is not None else "LLM 切段")
+    if data is None:
+        try:
+            data = chat_json(PLAN_SYSTEM, user, max_tokens=4000, seed=_seed_of(state))
+        except LLMError as e:
+            data = None
+            state.get("log", []).append(f"plan_segments LLM 失败，用规则切段降级: {e}")
     segs = []
     if isinstance(data, list):
         segs = data
@@ -286,12 +303,15 @@ def build_timeline(state: CutState) -> dict:
         seg_lines.append(f"{i}. {s.get('text','')}（情绪: {s.get('mood','')}，约{s.get('duration',0)}s，关键词: {', '.join(s.get('kw_en',[])) or ', '.join(s.get('kw_cn',[]))}）")
     user = "本地素材清单：\n" + "\n".join(media_lines) + "\n\n文案分段：\n" + "\n".join(seg_lines)
     _checkpoint(state, "build_timeline")
-    _emit(state, "build_timeline", "progress", done=0, total=1, item="LLM 编排")
-    try:
-        data = chat_json(MATCH_SYSTEM, user, max_tokens=6000, seed=_seed_of(state))
-    except LLMError as e:
-        data = None
-        state.get("log", []).append(f"build_timeline LLM 失败，用轮播规则降级: {e}")
+    data = _agent_decision(state, "timeline")
+    _emit(state, "build_timeline", "progress", done=0, total=1,
+          item="编码代理编排" if data is not None else "LLM 编排")
+    if data is None:
+        try:
+            data = chat_json(MATCH_SYSTEM, user, max_tokens=6000, seed=_seed_of(state))
+        except LLMError as e:
+            data = None
+            state.get("log", []).append(f"build_timeline LLM 失败，用轮播规则降级: {e}")
     tl = []
     if isinstance(data, list):
         tl = data
@@ -555,18 +575,20 @@ def pick_music(state: CutState) -> dict:
     moods = "、".join(dict.fromkeys(s.get("mood", "") for s in segs if s.get("mood")))
     copy_head = state.get("copy", "")[:120]
     _checkpoint(state, "pick_music")
-    try:
-        rec = chat_json(MUSIC_SYSTEM, f"文案开头：{copy_head}\n整体情绪：{moods or '通用'}",
-                        max_tokens=1200, seed=_seed_of(state))
-        if not isinstance(rec, dict):
-            rec = {}
-    except LLMError as e:
-        # 单 LLM 实例被争用时可能失败：用分段情绪做规则推荐，不挡下载
-        _degraded(state, f"配乐推荐失败，采用情绪规则：{e}")
-        rec = {"mood": moods or "通用",
-               "primary": {"title": f"（推荐服务暂不可用，按情绪「{moods or '通用'}」到 freepd.cn 选曲）",
-                           "artist": "FreePD", "reason": f"LLM 推荐失败: {e}"},
-               "alternatives": []}
+    rec = _agent_decision(state, "music")
+    if rec is None:
+        try:
+            rec = chat_json(MUSIC_SYSTEM, f"文案开头：{copy_head}\n整体情绪：{moods or '通用'}",
+                            max_tokens=1200, seed=_seed_of(state))
+            if not isinstance(rec, dict):
+                rec = {}
+        except LLMError as e:
+            # 单 LLM 实例被争用时可能失败：用分段情绪做规则推荐，不挡下载
+            _degraded(state, f"配乐推荐失败，采用情绪规则：{e}")
+            rec = {"mood": moods or "通用",
+                   "primary": {"title": f"（推荐服务暂不可用，按情绪「{moods or '通用'}」到 freepd.cn 选曲）",
+                               "artist": "FreePD", "reason": f"LLM 推荐失败: {e}"},
+                   "alternatives": []}
     rec.setdefault("mood", moods or "通用")
     rec.setdefault("alternatives", [])
     music = {"primary": rec.get("primary", {}) if isinstance(rec.get("primary"), dict) else {},

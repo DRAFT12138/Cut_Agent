@@ -4,7 +4,7 @@
 
 ## 1. 安装
 
-准备 Python 3.10–3.14、`uv`（或 `pip`）、FFmpeg 与 FFprobe，以及带 Corepack 的 Node.js。在终端确认 `ffmpeg -version` 和 `ffprobe -version` 都能运行。Web 前端需单独构建，随后由 Python 服务提供页面：
+在 Linux 或 Windows 上准备 Python 3.10–3.14、`uv`（或 `pip`），以及 FFmpeg 与 FFprobe 5+。在终端确认 `ffmpeg -version` 和 `ffprobe -version` 都能运行。Python 发行物已包含 Web 前端；只有前端开发需要带 Corepack 的 Node.js：
 
 ```bash
 uv sync

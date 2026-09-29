@@ -4,17 +4,13 @@
 
 ## 1. Install
 
-Install Python 3.10–3.14 and `uv` (or use `pip`), FFmpeg with FFprobe, and Node.js with Corepack. Confirm `ffmpeg -version` and `ffprobe -version` work in your terminal. The web frontend is built separately and then served by the Python backend:
+Install Python 3.10–3.14 and `uv` (or use `pip`) on Linux or Windows, plus FFmpeg 5 or newer with FFprobe. Confirm `ffmpeg -version` and `ffprobe -version` work in your terminal. The Python distribution includes the web frontend:
 
 ```bash
 uv sync
-cd web
-corepack pnpm install --frozen-lockfile
-corepack pnpm build
-cd ..
 ```
 
-`uv sync` uses the repository's lockfile. If you use pip, run `python -m pip install -e .` and replace `uv run cut-agent` below with `python -m cut_agent.cli`. To develop the frontend, start the backend on port 8090 and run `corepack pnpm dev` in `web/`; Vite serves port 5173 and proxies `/api` to the backend.
+`uv sync` uses the repository's lockfile. If you use pip, run `python -m pip install .` and replace `uv run cut-agent` below with `python -m cut_agent.cli`. Node.js with Corepack is required only to develop the frontend: start the backend on port 8090 and run `corepack pnpm dev` in `web/`; Vite serves port 5173 and proxies `/api` to the backend.
 
 ## 2. Configure the model
 
@@ -107,7 +103,7 @@ On Windows, `pwsh tools/start_owsearch.ps1 -NoProxy` is a convenience launcher f
 | Symptom | Check |
 | --- | --- |
 | `ffmpeg` / `ffprobe` missing | Install both programs and reopen the terminal so `PATH` is updated. |
-| Web page shows a placeholder | Build `web/` and restart `cut-agent serve`. |
+| Web page reports missing packaged assets | Reinstall an official wheel or rebuild with `uv run python tools/build_web_assets.py`. |
 | New task rejects the media path | Use an existing absolute directory path visible to the backend, not the browser machine's path. |
 | Model stage is slow or degraded | Check `CUT_AGENT_LLM_BASE_URL`, model ID, key, endpoint availability, and image support. |
 | No preview MP4 | Enable preview when creating the task or rebuild with `--preview`. |
