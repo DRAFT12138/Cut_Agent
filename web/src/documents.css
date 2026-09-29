@@ -1,0 +1,35 @@
+.plan-reader { min-width: 0; }
+.plan-sections { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 12px 12px; border-bottom: 1px solid #293447; }
+.plan-sections-label { color: #9aabc0; font-size: 12px; margin-right: 4px; }
+.plan-sections button { color: #cbd8e9; background: #172234; border: 1px solid #35445a; border-radius: 5px; padding: 3px 9px; font: inherit; font-size: 12px; line-height: 1.5; cursor: pointer; }
+.plan-sections button:hover, .plan-sections button:focus-visible { border-color: #3ba7ff; color: #fff; }
+.plan-sections button[aria-current="location"] { color: #fff; background: #174773; border-color: #3ba7ff; }
+.plan-document {
+  color: #d3dce8;
+  line-height: 1.75;
+  max-height: 76vh;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 4px 16px 20px;
+}
+.plan-document h1 { font-size: 26px; }
+.plan-document h2 { font-size: 21px; margin: 30px 0 12px; border-bottom: 1px solid #293447; padding-bottom: 8px; }
+.plan-document h3 { font-size: 16px; margin-top: 22px; }
+.plan-document p { margin: 10px 0; }
+.plan-document img { display: block; max-width: 100%; width: 560px; height: auto; border-radius: 6px; }
+.plan-document blockquote { border-left: 3px solid #3ba7ff; margin: 14px 0; padding: 2px 16px; color: #aebed3; background: #111c2b; }
+.plan-document table { display: block; overflow-x: auto; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+.plan-document th, .plan-document td { border: 1px solid #293447; padding: 8px 12px; min-width: 64px; vertical-align: top; }
+.plan-document th { background: #172234; text-align: left; }
+.plan-document code { background: #172234; border-radius: 3px; padding: 1px 4px; }
+.plan-document pre { overflow-x: auto; padding: 12px; background: #101723; }
+.plan-document pre code { background: none; padding: 0; }
+.plan-document ul, .plan-document ol { padding-left: 24px; }
+.plan-document .contains-task-list { list-style: none; padding-left: 4px; }
+.plan-document input[type="checkbox"] { margin-right: 8px; }
+@media (max-width: 600px) {
+  .plan-sections { padding: 4px 2px 10px; }
+  .plan-document { padding: 0 2px 12px; }
+  .plan-document h1 { font-size: 21px; }
+  .plan-document th, .plan-document td { padding: 6px; }
+}

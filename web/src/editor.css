@@ -1,0 +1,18 @@
+.plan-editor__rows { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.plan-editor__row { min-width: 0; padding: 10px; border: 1px solid #303b4d; border-radius: 8px; background: #111a28; scroll-margin-top: 20px; }
+.plan-editor__row.is-drop-target { border-color: #7bc0ff; background: #182c42; }
+.plan-editor__current { display: flex; gap: 12px; margin-bottom: 10px; }
+.plan-editor__current > img, .plan-editor__placeholder { flex: 0 0 160px; width: 160px; height: 90px; object-fit: contain; border-radius: 5px; background: #080e17; }
+.plan-editor__placeholder, .plan-editor__candidate-placeholder { display: grid; place-items: center; color: #a5b5ca; font-size: 12px; }
+.plan-editor__current-text { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.plan-editor__drag-handle { display: inline-block; padding: 3px 8px; border: 1px solid #435775; border-radius: 4px; color: #b5c6dd; cursor: grab; user-select: none; }
+.plan-editor__drag-handle:active { cursor: grabbing; }
+.plan-editor__alternatives { display: flex; gap: 8px; min-width: 0; max-width: 100%; overflow-x: auto; margin-bottom: 10px; padding-bottom: 3px; }
+.plan-editor__candidate { display: flex; gap: 8px; align-items: center; flex: 0 0 260px; min-height: 62px; padding: 5px; border: 1px solid #35445a; border-radius: 6px; color: #e1e8f2; background: #1b2636; text-align: left; cursor: pointer; }
+.plan-editor__candidate:hover, .plan-editor__candidate:focus-visible { border-color: #7bc0ff; outline: none; }
+.plan-editor__candidate:disabled { opacity: .55; cursor: wait; }
+.plan-editor__candidate img, .plan-editor__candidate-placeholder { flex: 0 0 80px; width: 80px; height: 48px; object-fit: contain; border-radius: 3px; background: #080e17; }
+.plan-editor__candidate-copy { min-width: 0; }
+.plan-editor__candidate-copy strong, .plan-editor__candidate-copy small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.plan-editor__candidate-copy small { color: #a5b5ca; }
+@media (max-width: 600px) { .plan-editor__current > img, .plan-editor__placeholder { flex-basis: 112px; width: 112px; height: 72px; } }
