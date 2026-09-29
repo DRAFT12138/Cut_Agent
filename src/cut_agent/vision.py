@@ -80,13 +80,19 @@ class Shot:
     description: str = ""
     roles: list[str] = field(default_factory=list)
     frame_motions: list[float] = field(default_factory=list)
+    # Model-derived facts stay separate from prose so callers can filter and
+    # rank them.  Each value carries its evidence time and confidence.
+    tags: dict[str, list[str]] = field(default_factory=dict)
+    tag_evidence: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {"idx": self.idx, "start": self.start, "end": self.end,
                 "cut_score": round(self.cut_score, 4), "motion": round(self.motion, 4),
                 "n_frames": len(self.frames), "frames": [str(p) for p in self.frames],
                 "frame_times": list(self.frame_times), "frame_motions": list(self.frame_motions),
-                "description": self.description, "roles": list(self.roles)}
+                "description": self.description, "roles": list(self.roles),
+                "tags": {k: list(v) for k, v in self.tags.items()},
+                "tag_evidence": [dict(v) for v in self.tag_evidence]}
 
 
 @dataclass
@@ -107,7 +113,8 @@ class VideoVision:
         shots = [Shot(idx=s["idx"], start=s["start"], end=s["end"], cut_score=s["cut_score"],
                       motion=s["motion"], frames=[Path(p) for p in s["frames"]],
                       frame_times=s["frame_times"], frame_motions=s["frame_motions"],
-                      description=s.get("description", ""), roles=s.get("roles", []))
+                      description=s.get("description", ""), roles=s.get("roles", []),
+                      tags=s.get("tags", {}), tag_evidence=s.get("tag_evidence", []))
                  for s in data["shots"]]
         duration = float(data["duration"])
         if not math.isfinite(duration) or duration <= 0:
@@ -518,7 +525,12 @@ def describe_shots(vv: VideoVision, prompt: str | None = None) -> None:
         parts = [{"type": "text", "text":
                   '逐镜头描述主体、动作、情绪、色调，不要合并镜头。只输出 JSON：'
                   '{"shots":[{"shot_idx":1,"description":"具体画面",'
-                  '"roles":["开头","发展","高潮","收尾"]}]}。'
+                  '"roles":["开头","发展","高潮","收尾"],'
+                  '"tags":{"subjects":[],"actions":[],"scenes":[],"shot_sizes":[],'
+                  '"camera_angles":[],"movement_directions":[],"gaze_directions":[],'
+                  '"text_regions":[],"emotions":[]},'
+                  '"evidence":[{"tag":"人物","frame_time":1.2,"confidence":0.9}]}]}。'
+                  '标签必须来自画面；置信度为 0 到 1，frame_time 必须是所给帧时间。'
                   'roles 只选适合的角色，不必全部选择。' + (prompt or "")}]
         for shot in batch:
             parts.append({"type": "text", "text":
@@ -549,3 +561,27 @@ def describe_shots(vv: VideoVision, prompt: str | None = None) -> None:
             shot.description = description.strip()
             roles = label.get("roles", [])
             shot.roles = [r for r in roles if r in ("开头", "发展", "高潮", "收尾")] if isinstance(roles, list) else []
+            allowed = {"subjects", "actions", "scenes", "shot_sizes", "camera_angles",
+                       "movement_directions", "gaze_directions", "text_regions", "emotions"}
+            tags = label.get("tags", {})
+            if isinstance(tags, dict):
+                shot.tags = {key: [str(value).strip() for value in values
+                                   if isinstance(value, (str, int, float)) and str(value).strip()]
+                             for key, values in tags.items()
+                             if key in allowed and isinstance(values, list)}
+            evidence = label.get("evidence", [])
+            valid_times = shot.frame_times
+            shot.tag_evidence = []
+            if isinstance(evidence, list):
+                for item in evidence:
+                    if not isinstance(item, dict) or not str(item.get("tag", "")).strip():
+                        continue
+                    try:
+                        confidence, frame_time = float(item["confidence"]), float(item["frame_time"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if 0 <= confidence <= 1 and valid_times and any(abs(frame_time - t) < .011 for t in valid_times):
+                        shot.tag_evidence.append({"tag": str(item["tag"]).strip(),
+                                                  "frame_time": frame_time,
+                                                  "confidence": confidence,
+                                                  "source": "vision_model"})
