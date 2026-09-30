@@ -51,6 +51,41 @@ def test_real_preview_labels_missing_rows_and_resume(tmp_path, monkeypatch):
     assert second["n_segments"] == 2 and second["has_music"]
 
 
+def test_preview_mixes_source_silence_narration_and_looped_bgm(tmp_path):
+    voiced = tmp_path / "voiced.mp4"
+    silent = tmp_path / "silent.mp4"
+    narration = tmp_path / "narration.wav"
+    music = tmp_path / "short-bgm.wav"
+    subprocess.run([render._ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=red:size=160x90:rate=25:duration=.4", "-f", "lavfi", "-i",
+                    "sine=frequency=300:duration=.4", "-c:v", "libx264", "-c:a", "aac",
+                    "-shortest", str(voiced)], check=True)
+    subprocess.run([render._ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "color=blue:size=160x90:rate=25:duration=.4", "-c:v", "libx264", str(silent)], check=True)
+    for path, spec in ((narration, "sine=frequency=900:duration=.8"),
+                       (music, "sine=frequency=120:duration=.2")):
+        subprocess.run([render._ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", spec,
+                        str(path)], check=True)
+    result = render.render_video(
+        [{"media": voiced.name, "kind": "video", "use_duration": .4},
+         {"media": silent.name, "kind": "video", "use_duration": .4}],
+        tmp_path, {}, music, tmp_path / "preview.mp4", narration_path=narration,
+        narration_segments=[{"source_start": 0, "source_end": .4, "timeline_start": 0},
+                            {"source_start": .4, "source_end": .8, "timeline_start": .4}],
+        source_volume=.7, narration_volume=.9, ducking_db=-10)
+    assert result["has_music"] and result["has_narration"]
+    assert result["audio_warnings"] == ["#2 silent.mp4 无源音轨，已补等时长静音"]
+    assert [track["type"] for track in result["audio_tracks"]] == ["source", "narration", "bgm"]
+    assert result["mix_fingerprint"]["ducking_db"] == -10
+    probe = subprocess.run([render._ffprobe(), "-v", "error", "-show_entries",
+                            "stream=codec_type,duration", "-of", "json", result["path"]],
+                           capture_output=True, text=True, check=True)
+    streams = json.loads(probe.stdout)["streams"]
+    video_duration = float(next(row["duration"] for row in streams if row["codec_type"] == "video"))
+    audio_duration = float(next(row["duration"] for row in streams if row["codec_type"] == "audio"))
+    assert audio_duration == pytest.approx(video_duration, abs=.04)
+
+
 def test_preview_route_range_and_edit_invalidation(tmp_runs, fake_llm):
     h, _ = runs.start_run("unused", "test", sync=True)
     root = runctl.run_dir(h.run_id)
