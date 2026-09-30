@@ -74,3 +74,4 @@ def test_planning_uses_real_duration_for_timeline(monkeypatch):
     assert planned["narration"]["status"] == "ready"
     timeline = graph.build_timeline({**planned, "media": [], "log": []})["timeline"]
     assert [row["use_duration"] for row in timeline] == [2, 2]
+    assert [(row["narration_start"], row["narration_end"]) for row in timeline] == [(0, 2), (2, 4)]

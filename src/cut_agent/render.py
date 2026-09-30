@@ -14,7 +14,6 @@ from __future__ import annotations
 import subprocess
 import json
 import math
-import re
 from fractions import Fraction
 from pathlib import Path
 
@@ -27,6 +26,9 @@ from .source_timing import FrameIndex, align_timeline
 TARGET_W, TARGET_H = 1280, 720
 FPS = 30
 BGM_VOLUME = 0.18
+SOURCE_VOLUME = 1.0
+NARRATION_VOLUME = 1.0
+DUCKING_DB = -12.0
 
 # 归一化滤镜：等比缩放 + 黑边补齐到 1280x720，统一 SAR 与帧率
 _NORM_VF = (
@@ -59,6 +61,16 @@ def _duration_of(p: Path) -> float:
         return 0.0
 
 
+def _has_audio(p: Path) -> bool:
+    """Return whether ffmpeg can see an audio stream (probe failures are silence)."""
+    result = subprocess.run(
+        [_ffprobe(), "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=index", "-of", "csv=p=0", str(p)],
+        capture_output=True, text=True, timeout=60,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
 def _check_video(p: Path, frames: int, fps: float, context: str, *,
                  width: int = TARGET_W, height: int = TARGET_H) -> None:
     """Decode and verify preview geometry/timing before checkpointing or publishing."""
@@ -85,6 +97,20 @@ def _check_video(p: Path, frames: int, fps: float, context: str, *,
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError, TypeError,
             ZeroDivisionError) as exc:
         raise RenderError(f"{context}校验失败：{exc}") from exc
+
+
+def _check_audio(p: Path, duration: float, fps: float, context: str) -> None:
+    result = subprocess.run(
+        [_ffprobe(), "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=duration", "-of", "default=nw=1:nk=1", str(p)],
+        capture_output=True, text=True, timeout=max(60, duration * 5),
+    )
+    try:
+        actual = float(result.stdout.strip())
+        if result.returncode or not math.isclose(actual, duration, abs_tol=1 / fps + .02):
+            raise ValueError(f"需要 {duration:.3f}s 音频，实际 {actual:.3f}s")
+    except (ValueError, TypeError) as exc:
+        raise RenderError(f"{context}音轨校验失败：{exc}") from exc
 
 
 def _filter_value(value: str) -> str:
@@ -129,31 +155,11 @@ def normalize_segment(src: Path, kind: str, start_offset: float, use_duration: f
         font = Path("C:/Windows/Fonts/msyh.ttc")
         font_arg = f"fontfile={_filter_value(font.resolve().as_posix())}:" if font.is_file() else ""
         vf += f",drawtext={font_arg}textfile={_filter_value(label_file.resolve().as_posix())}:expansion=none:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.7:x=16:y=16"
+    source_has_audio = kind == "video" and _has_audio(src)
     if kind == "video":
         if source_frames is not None:
             first, end = source_frames
             indexed_vf = vf.replace(f"fps={fps}", f"fps={fps}:round=up:eof_action=pass", 1)
-            index = FrameIndex.optional(source_timing)
-            if index is not None and 0 < first < end <= index.count:
-                # Seek between native frames, then verify the decoded first frame's
-                # original PTS. Some demuxers seek imprecisely; those fall back below.
-                seek = (index.ticks[first - 1] + index.ticks[first]) * index.base / 2
-                expected_pts = index.origin + index.ticks[first]
-                fast_vf = (f"trim=start_pts={expected_pts},trim=end_frame={end - first},"
-                           f"showinfo,setpts=PTS-STARTPTS,{indexed_vf}")
-                fast_cmd = ([_ffmpeg(), "-hide_banner", "-loglevel", "info", "-nostats", "-y",
-                             "-copyts", "-ss", f"{seek:.12f}", "-i", str(src),
-                             "-frames:v", str(frames), "-an", "-vf", fast_vf,
-                             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                             "-pix_fmt", "yuv420p", str(out_path)])
-                try:
-                    result = _run(fast_cmd, timeout=max(120.0, use_duration * 15))
-                    first_pts = re.search(r"showinfo[^\n]*\bn:\s*0\s+pts:\s*(-?\d+)", result.stderr)
-                    if first_pts and int(first_pts.group(1)) == expected_pts:
-                        return
-                except RenderError:
-                    pass
-                out_path.unlink(missing_ok=True)
             vf = (f"trim=start_frame={first}:end_frame={end},setpts=PTS-STARTPTS,"
                   + indexed_vf)
             inputs = ["-i", str(src)]
@@ -166,17 +172,25 @@ def normalize_segment(src: Path, kind: str, start_offset: float, use_duration: f
             inputs = ["-i", str(src)]
         else:
             inputs = ["-ss", f"{max(0.0, start_offset):.9f}", "-i", str(src), "-t", f"{use_duration:.9f}"]
-        cmd = (base + inputs + ["-frames:v", str(frames), "-an",
-                       "-vf", vf,
+        audio_input = [] if source_has_audio else ["-f", "lavfi", "-t", f"{use_duration:.9f}",
+                                                    "-i", "anullsrc=r=48000:cl=stereo"]
+        audio_index = 0 if source_has_audio else 1
+        audio_start = start_offset if source_has_audio and (source_frames is not None or legacy_full_decode) else 0
+        af = (f"[{audio_index}:a:0]atrim=start={audio_start:.9f}:end={audio_start + use_duration:.9f},"
+              "asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,"
+              f"apad,atrim=0:{use_duration:.9f}[a]")
+        cmd = (base + inputs + audio_input + ["-frames:v", str(frames),
+                       "-filter_complex", f"[0:v]{vf}[v];{af}", "-map", "[v]", "-map", "[a]",
                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                       "-pix_fmt", "yuv420p", str(out_path)])
+                       "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+                       "-shortest", str(out_path)])
     else:
         src = _still_input(src, out_path)
-        cmd = (base + ["-loop", "1", "-framerate", str(fps),
-                       "-i", str(src), "-frames:v", str(frames),
-                       "-vf", vf,
+        cmd = (base + ["-loop", "1", "-framerate", str(fps), "-i", str(src),
+                       "-f", "lavfi", "-t", f"{use_duration:.9f}", "-i", "anullsrc=r=48000:cl=stereo",
+                       "-frames:v", str(frames), "-map", "0:v:0", "-map", "1:a:0", "-vf", vf,
                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                       "-pix_fmt", "yuv420p", str(out_path)])
+                       "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", str(out_path)])
     _run(cmd, timeout=max(120.0, use_duration * 15,
                           (start_offset + use_duration) * 5 if source_frames or legacy_full_decode else 0))
 
@@ -197,41 +211,84 @@ def _concat_copy(seg_paths: list[Path], out_path: Path) -> bool:
         return False
 
 
+def _add_silent_audio(video_path: Path, duration: float) -> None:
+    """Give externally rendered video the same stereo audio layout as every segment."""
+    output = video_path.with_name(video_path.stem + ".audio" + video_path.suffix)
+    _run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", str(video_path),
+          "-f", "lavfi", "-t", f"{duration:.9f}", "-i", "anullsrc=r=48000:cl=stereo",
+          "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac",
+          "-shortest", str(output)], timeout=max(120.0, duration * 5))
+    output.replace(video_path)
+
+
 def _concat_reencode(seg_paths: list[Path], out_path: Path) -> None:
     """回退：concat filter 重编码（对编码参数不一致更宽容）。"""
     args = [_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y"]
     for p in seg_paths:
         args += ["-i", str(p)]
     n = len(seg_paths)
-    fc = "".join(f"[{i}:v]" for i in range(n)) + f"concat=n={n}:v=1:a=0[v]"
-    args += ["-filter_complex", fc, "-map", "[v]",
+    fc = "".join(f"[{i}:v][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[v][a]"
+    args += ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-             "-pix_fmt", "yuv420p", str(out_path)]
+             "-pix_fmt", "yuv420p", "-c:a", "aac", str(out_path)]
     _run(args, timeout=max(300.0, n * 60))
 
 
-def _mux_bgm(video_path: Path, music_path: Path, out_path: Path, total_dur: float,
-             volume: float = BGM_VOLUME) -> bool:
-    """叠 BGM：视频流拷贝，音频 = BGM 压音量 + 补静音到片长。失败返回 False。"""
-    if not music_path.exists() or music_path.stat().st_size < 10_000:
-        return False
+def _mux_bgm(video_path: Path, music_path: Path | None, out_path: Path, total_dur: float,
+             volume: float = BGM_VOLUME, *, narration_path: Path | None = None,
+             narration_segments: list[dict] | None = None, source_volume: float = SOURCE_VOLUME,
+             narration_volume: float = NARRATION_VOLUME, ducking_db: float = DUCKING_DB) -> dict:
+    """Mix source sound, timeline-positioned narration and looped/ducked BGM."""
+    has_music = bool(music_path and music_path.is_file() and music_path.stat().st_size >= 10_000)
+    has_narration = bool(narration_path and narration_path.is_file() and _has_audio(narration_path))
+    if not has_music and not has_narration:
+        return {"ok": False, "has_music": False, "has_narration": False}
     try:
-        _run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
-              "-i", str(video_path), "-i", str(music_path),
-              "-filter_complex",
-              f"[1:a]volume={volume},apad,atrim=0:{total_dur:.3f}[a]",
-              "-map", "0:v:0", "-map", "[a]",
-              "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", str(out_path)],
-             timeout=300)
-        return True
+        args = [_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", str(video_path)]
+        filters = [f"[0:a]volume={source_volume},atrim=0:{total_dur:.6f}[source]"]
+        voices = []
+        next_input = 1
+        if has_narration:
+            args += ["-i", str(narration_path)]
+            segments = narration_segments or [{"source_start": 0, "source_end": total_dur, "timeline_start": 0}]
+            for j, seg in enumerate(segments):
+                start, end, at = seg["source_start"], seg["source_end"], seg["timeline_start"]
+                delay = max(0, round(float(at) * 1000))
+                filters.append(f"[{next_input}:a]atrim={start}:{end},asetpts=PTS-STARTPTS,volume={narration_volume},adelay={delay}|{delay}[voice{j}]")
+                voices.append(f"[voice{j}]")
+            next_input += 1
+        if has_music:
+            args += ["-stream_loop", "-1", "-i", str(music_path)]
+            filters.append(f"[{next_input}:a]volume={volume},atrim=0:{total_dur:.6f}[music]")
+        mix_inputs = ["[source]"] + voices
+        if voices:
+            voice_tail = ",asplit=2[voice_mix][voice_sc]" if has_music else "[voice_mix]"
+            filters.append("".join(voices) + f"amix=inputs={len(voices)}:normalize=0,atrim=0:{total_dur:.6f}" + voice_tail)
+            mix_inputs = ["[source]", "[voice_mix]"]
+        if has_music and voices:
+            ratio = max(1.0, min(20.0, abs(ducking_db) / 2))
+            filters.append(f"[music][voice_sc]sidechaincompress=threshold=0.02:ratio={ratio}:attack=20:release=300[ducked]")
+            mix_inputs.append("[ducked]")
+        elif has_music:
+            mix_inputs.append("[music]")
+        filters.append("".join(mix_inputs) + f"amix=inputs={len(mix_inputs)}:normalize=0,apad,atrim=0:{total_dur:.6f}[a]")
+        args += ["-filter_complex", ";".join(filters), "-map", "0:v:0", "-map", "[a]",
+                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-t", f"{total_dur:.6f}", str(out_path)]
+        _run(args, timeout=300)
+        return {"ok": True, "has_music": has_music, "has_narration": has_narration}
     except RenderError:
-        return False
+        return {"ok": False, "has_music": False, "has_narration": False}
 
 
 def render_video(timeline: list[dict], media_folder: Path,
                  media_index: dict[str, dict],
                  music_path: Path | None, out_path: Path, *,
-                 fps: float = 25, volume: float = .4, progress=None) -> dict:
+                 fps: float = 25, volume: float = .4, progress=None,
+                 narration_path: Path | None = None,
+                 narration_segments: list[dict] | None = None,
+                 source_volume: float = SOURCE_VOLUME,
+                 narration_volume: float = NARRATION_VOLUME,
+                 ducking_db: float = DUCKING_DB) -> dict:
     """Opt-in preview with labels and per-segment resume; missing rows retain their duration."""
     from PIL import Image
     if not math.isfinite(fps) or fps <= 0:
@@ -286,10 +343,12 @@ def render_video(timeline: list[dict], media_folder: Path,
         page_fingerprints = ([{"path": str(Path(page["path"]).resolve()),
                                "fingerprint": fingerprint(Path(page["path"])), "duration": page["duration"]}
                               for page in html_pages] if is_html else None)
+        source_has_audio = kind == "video" and _has_audio(src)
         key = {"source": str(src.resolve()), "fingerprint": fingerprint(src), "kind": kind,
                "offset": offset, "duration": encoded_duration, "label": label, "fps": fps,
                "width": target_w, "height": target_h,
-               "version": 1 if is_html else 5 if kind == "image" else 6}
+               "source_audio": source_has_audio,
+               "version": 2 if is_html else 6 if kind == "image" else 7}
         if page_fingerprints is not None:
             key["html_pages"] = page_fingerprints
         if source_frames is not None:
@@ -301,6 +360,7 @@ def render_video(timeline: list[dict], media_folder: Path,
         if reusable:
             try:
                 _check_video(segment, expected_frames, fps, f"第 {i} 段缓存", width=target_w, height=target_h)
+                _check_audio(segment, encoded_duration, fps, f"第 {i} 段缓存")
             except RenderError:
                 reusable = False
         if not reusable:
@@ -308,6 +368,7 @@ def render_video(timeline: list[dict], media_folder: Path,
             if is_html:
                 from .html_motion import render_pages
                 render_pages(html_pages, temporary, encoded_duration, fps, width=target_w, height=target_h)
+                _add_silent_audio(temporary, encoded_duration)
             else:
                 normalize_segment(src, kind, offset, encoded_duration, temporary, fps=fps, label=label,
                                   width=target_w, height=target_h,
@@ -316,6 +377,7 @@ def render_video(timeline: list[dict], media_folder: Path,
             try:
                 _check_video(temporary, expected_frames, fps, f"第 {i} 段（{name}）",
                              width=target_w, height=target_h)
+                _check_audio(temporary, encoded_duration, fps, f"第 {i} 段（{name}）")
             except RenderError:
                 if kind != "video" or source_frames is not None:
                     raise
@@ -324,11 +386,15 @@ def render_video(timeline: list[dict], media_folder: Path,
                                   width=target_w, height=target_h, legacy_full_decode=True)
                 _check_video(temporary, expected_frames, fps, f"第 {i} 段（{name}）",
                              width=target_w, height=target_h)
+                _check_audio(temporary, encoded_duration, fps, f"第 {i} 段（{name}）")
             temporary.replace(segment)
             write_json_atomic(checkpoint, key)
         paths.append(segment)
         markers.append({"seq": i, "start": marker_start, "end": marker_end,
-                        "media": name, "missing": missing})
+                        "media": name, "missing": missing,
+                        "source_audio": source_has_audio})
+        if kind == "video" and not source_has_audio:
+            skipped.append(f"#{i} {name} 无源音轨，已补等时长静音")
         elapsed += duration
         if progress:
             progress(i, len(timeline), name)
@@ -342,13 +408,38 @@ def render_video(timeline: list[dict], media_folder: Path,
     total_frames = frame_index(elapsed, fps)
     duration = total_frames / fps
     final = workdir / "final.mp4"
-    has_music = music_path is not None and _mux_bgm(silent, music_path, final, duration, volume)
-    if not has_music:
+    mix_fingerprint = {
+        "version": 2, "video": fingerprint(silent),
+        "music": fingerprint(music_path) if music_path else None,
+        "narration": fingerprint(narration_path) if narration_path else None,
+        "narration_segments": narration_segments or [], "bgm_volume": volume,
+        "source_volume": source_volume, "narration_volume": narration_volume,
+        "ducking_db": ducking_db, "duration": duration,
+    }
+    mixed = _mux_bgm(silent, music_path, final, duration, volume,
+                     narration_path=narration_path, narration_segments=narration_segments,
+                     source_volume=source_volume, narration_volume=narration_volume,
+                     ducking_db=ducking_db)
+    if not mixed["ok"]:
         silent.replace(final)
+    write_json_atomic(workdir / "mix.json", mix_fingerprint)
     _check_video(final, total_frames, fps, "最终预览", width=target_w, height=target_h)
+    _check_audio(final, duration, fps, "最终预览")
     final.replace(out_path)
-    return {"n_segments": len(paths), "skipped": skipped, "has_music": has_music,
+    tracks = [{"type": "source", "gain": source_volume,
+               "segments_with_audio": sum(bool(m["source_audio"]) for m in markers)}]
+    if mixed["has_narration"]:
+        tracks.append({"type": "narration", "path": str(narration_path.resolve()),
+                       "gain": narration_volume, "segments": len(narration_segments or [])})
+    if mixed["has_music"]:
+        tracks.append({"type": "bgm", "path": str(music_path.resolve()), "gain": volume,
+                       "ducking_db": ducking_db, "looped": True})
+    return {"n_segments": len(paths), "skipped": skipped, "has_music": mixed["has_music"],
+            "has_narration": mixed["has_narration"], "audio_tracks": tracks,
+            "audio_warnings": [warning for warning in skipped if "音轨" in warning],
             "duration": round(duration, 3), "size_mb": round(out_path.stat().st_size / 1024 / 1024, 2),
             "markers": markers, "fps": fps, "frame_count": total_frames,
-            "bgm_volume": volume, "width": target_w, "height": target_h,
+            "bgm_volume": volume, "source_volume": source_volume,
+            "narration_volume": narration_volume, "ducking_db": ducking_db,
+            "mix_fingerprint": mix_fingerprint, "width": target_w, "height": target_h,
             "path": str(out_path.resolve())}

@@ -308,11 +308,18 @@ def build_timeline(state: CutState) -> dict:
     media = state["media"]
     segs = state["segments"]
     if not media:
-        timeline = [{"seq": i, "media": "", "source": "web", "kind": "video",
-                     "needs_web": True, "start_offset": 0, "use_duration": number(s.get("duration"), 6),
-                     "segment_text": s.get("text", ""), "role": s.get("role", "发展"),
-                     "intensity": s.get("intensity", 3), "web_query": _query_for({"segment_text": s.get("text", "")}, segs)}
-                    for i, s in enumerate(segs, 1)]
+        timeline = []
+        for i, segment in enumerate(segs, 1):
+            row = {"seq": i, "media": "", "source": "web", "kind": "video",
+                   "needs_web": True, "start_offset": 0,
+                   "use_duration": number(segment.get("duration"), 6),
+                   "segment_text": segment.get("text", ""), "role": segment.get("role", "发展"),
+                   "intensity": segment.get("intensity", 3),
+                   "web_query": _query_for({"segment_text": segment.get("text", "")}, segs)}
+            for field in ("narration_start", "narration_end", "timing_source", "timing_confidence"):
+                if field in segment:
+                    row[field] = segment[field]
+            timeline.append(row)
         timeline, report = critique(timeline, [], auto_fix=False)
         return {"timeline": timeline, "critique": report,
                 "log": state.get("log", []) + ["没有本地素材，全部转网络素材"]}
@@ -394,6 +401,9 @@ def build_timeline(state: CutState) -> dict:
                        segs[i - 1] if i <= len(segs) else {})
         row["role"] = segment.get("role", "发展")
         row["intensity"] = segment.get("intensity", 3)
+        for field in ("narration_start", "narration_end", "timing_source", "timing_confidence"):
+            if field in segment:
+                row[field] = segment[field]
         cleaned.append(row)
     cleaned, report = critique(cleaned, media)
     return {"timeline": cleaned, "critique": report,
@@ -719,10 +729,26 @@ def write_doc(state: CutState) -> dict:
         from .render import render_video
         downloads = music.get("downloads", [])
         music_path = Path(downloads[0]["local"]) if downloads and downloads[0].get("local") else None
+        narration = state.get("narration") or {}
+        narration_source = narration.get("source") or {}
+        narration_path = Path(narration_source["path"]) if narration.get("status") == "ready" and narration_source.get("path") else None
+        narration_segments, timeline_at = [], 0.0
+        for row in timeline:
+            if row.get("narration_start") is not None and row.get("narration_end") is not None:
+                narration_segments.append({"source_start": float(row["narration_start"]),
+                                           "source_end": float(row["narration_end"]),
+                                           "timeline_start": timeline_at})
+            timeline_at += float(row.get("use_duration", 0))
         try:
             preview = render_video(timeline, Path(state["media_folder"]),
                                    {m["name"]: m for m in state.get("media", [])}, music_path,
                                    doc_dir / "preview.mp4", fps=storyboard["timeline_fps"],
+                                   narration_path=narration_path,
+                                   narration_segments=narration_segments,
+                                   source_volume=float(ctx.options.get("source_volume", 1.0)),
+                                   narration_volume=float(ctx.options.get("narration_volume", 1.0)),
+                                   ducking_db=float(ctx.options.get("ducking_db", -12.0)),
+                                   volume=float(ctx.options.get("bgm_volume", .4)),
                                    progress=lambda done, total, item: _emit(state, "write_doc", "progress", done=done, total=total, item=item))
             preview["status"] = "ready"
         except RunHalted:
@@ -825,7 +851,7 @@ def write_doc(state: CutState) -> dict:
         "music_cues": cues,
         "platform": state.get("platform") or (ctx.options.get("platform", "douyin") if ctx else "douyin"),
         **{key: state.get(key) for key in
-           ("media_folder", "copy", "media", "segments", "narrative", "timeline", "web_assets", "music", "critique")},
+           ("media_folder", "copy", "media", "segments", "narrative", "narration", "timeline", "web_assets", "music", "critique")},
         "segments": state.get("segments") or [], "timeline": timeline,
         "web_assets": web_assets, "music": music, "critique": report,
         "doc_path": str(doc), "line_doc_path": str(line_doc),
